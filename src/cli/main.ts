@@ -1,8 +1,16 @@
+import { join } from "node:path";
 import { Command } from "commander";
 import { config } from "../config";
 import { createAgentSession } from "../core/create-agent-session";
+import { configureLogger, createLogger } from "../utils/logger";
 import { ChatLoop } from "./chat-loop";
 
+configureLogger({
+	logDir: join(process.cwd(), "logs"),
+	level: "debug",
+});
+
+const logger = createLogger("cli.main");
 const program = new Command();
 
 program
@@ -14,8 +22,11 @@ program
 	.command("chat")
 	.description("Start an interactive chat session")
 	.action(async () => {
-		const session = await createAgentSession(config);
-		const chatLoop = new ChatLoop(session);
+		logger.info("chat.command.started");
+
+		const chatLoop = new ChatLoop((approveToolCall) =>
+			createAgentSession(config, approveToolCall),
+		);
 
 		await chatLoop.run();
 	});

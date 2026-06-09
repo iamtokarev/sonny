@@ -1,6 +1,14 @@
 import { Box, render, Text, useApp, useInput } from "ink";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentSession } from "../core/agent-session";
+import type {
+	ToolApprovalDecision,
+	ToolApprovalRequest,
+	ToolApprover,
+} from "../tools/tool-executor";
+import { createLogger } from "../utils/logger";
+
+const logger = createLogger("cli.chat-loop");
 
 type UiMessage = {
 	id: string;
@@ -9,15 +17,66 @@ type UiMessage = {
 };
 
 type ChatAppProps = {
-	session: AgentSession;
+	createSession: (approveToolCall: ToolApprover) => Promise<AgentSession>;
 };
 
-function ChatApp({ session }: ChatAppProps) {
+type ApprovalState = {
+	request: ToolApprovalRequest;
+	resolve: (decision: ToolApprovalDecision) => void;
+};
+
+function formatParameters(parameters: unknown): string {
+	try {
+		return JSON.stringify(parameters, null, 2);
+	} catch {
+		return String(parameters);
+	}
+}
+
+function ChatApp({ createSession }: ChatAppProps) {
 	const { exit } = useApp();
+	const [session, setSession] = useState<AgentSession | null>(null);
+	const [startupError, setStartupError] = useState<string | null>(null);
 	const [input, setInput] = useState("");
 	const [messages, setMessages] = useState<UiMessage[]>([]);
 	const [isThinking, setIsThinking] = useState(false);
+	const [approval, setApproval] = useState<ApprovalState | null>(null);
 	const nextMessageId = useRef(0);
+
+	useEffect(() => {
+		let cancelled = false;
+
+		const approveToolCall: ToolApprover = (request) =>
+			new Promise((resolve) => {
+				logger.info("tool.approval.prompted", {
+					toolName: request.toolName,
+					parameters: request.parameters,
+				});
+				setApproval({ request, resolve });
+			});
+
+		void createSession(approveToolCall)
+			.then((createdSession) => {
+				if (!cancelled) {
+					logger.info("ui.session.created");
+					setSession(createdSession);
+				}
+			})
+			.catch((error) => {
+				if (!cancelled) {
+					logger.error("ui.session.create.failed", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+					setStartupError(
+						error instanceof Error ? error.message : String(error),
+					);
+				}
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [createSession]);
 
 	function createMessage(role: UiMessage["role"], content: string): UiMessage {
 		nextMessageId.current += 1;
@@ -36,6 +95,13 @@ function ChatApp({ session }: ChatAppProps) {
 			return;
 		}
 
+		if (session === null) {
+			logger.warn("ui.submit.ignored_session_not_ready", {
+				messageLength: text.length,
+			});
+			return;
+		}
+
 		if (["q", "quit", "exit"].includes(text.toLowerCase())) {
 			exit();
 			return;
@@ -44,11 +110,20 @@ function ChatApp({ session }: ChatAppProps) {
 		setInput("");
 		setMessages((items) => [...items, createMessage("user", text)]);
 		setIsThinking(true);
+		logger.info("ui.submit.started", {
+			messageLength: text.length,
+		});
 
 		try {
 			const response = await session.chat(text);
+			logger.info("ui.submit.completed", {
+				responseLength: response.length,
+			});
 			setMessages((items) => [...items, createMessage("assistant", response)]);
 		} catch (error) {
+			logger.error("ui.submit.failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			setMessages((items) => [
 				...items,
 				createMessage(
@@ -61,9 +136,50 @@ function ChatApp({ session }: ChatAppProps) {
 		}
 	}
 
+	function resolveApproval(decision: ToolApprovalDecision): void {
+		if (approval === null) {
+			return;
+		}
+
+		logger.info(
+			decision.approved
+				? "tool.approval.ui.approved"
+				: "tool.approval.ui.denied",
+			{
+				toolName: approval.request.toolName,
+				reason: decision.approved ? undefined : decision.reason,
+			},
+		);
+		approval.resolve(decision);
+		setApproval(null);
+	}
+
 	useInput((character, key) => {
 		if (key.ctrl && character === "c") {
+			resolveApproval({
+				approved: false,
+				reason: "Tool call cancelled by user.",
+			});
 			exit();
+			return;
+		}
+
+		if (approval !== null) {
+			const answer = character.toLowerCase();
+
+			if (answer === "y") {
+				resolveApproval({ approved: true });
+				return;
+			}
+
+			if (answer === "n" || key.escape) {
+				resolveApproval({
+					approved: false,
+					reason: "Tool call denied by user.",
+				});
+				return;
+			}
+
 			return;
 		}
 
@@ -101,9 +217,13 @@ function ChatApp({ session }: ChatAppProps) {
 			<Box width="100%" borderStyle="single" borderColor="gray" />
 
 			<Box flexDirection="column" width="100%" minHeight={3}>
-				{messages.length === 0 ? (
+				{startupError !== null ? (
+					<Text color="red">! {startupError}</Text>
+				) : messages.length === 0 ? (
 					<Text dimColor>
-						Ask a question, describe a task, or paste context below.
+						{session === null
+							? "Starting Sonny..."
+							: "Ask a question, describe a task, or paste context below."}
 					</Text>
 				) : (
 					messages.map((message) => (
@@ -123,6 +243,31 @@ function ChatApp({ session }: ChatAppProps) {
 					))
 				)}
 			</Box>
+
+			{approval !== null ? (
+				<Box
+					flexDirection="column"
+					width="100%"
+					borderStyle="round"
+					borderColor="yellow"
+					paddingX={1}
+				>
+					<Text color="yellow" bold>
+						Tool approval required
+					</Text>
+					<Text>
+						<Text bold>{approval.request.toolName}</Text>{" "}
+						<Text dimColor>{approval.request.description}</Text>
+					</Text>
+					<Text dimColor>{formatParameters(approval.request.parameters)}</Text>
+					<Text>
+						<Text color="green">y</Text>
+						<Text dimColor> approve </Text>
+						<Text color="red">n</Text>
+						<Text dimColor> deny</Text>
+					</Text>
+				</Box>
+			) : null}
 
 			{isThinking ? (
 				<Text>
@@ -149,10 +294,14 @@ function ChatApp({ session }: ChatAppProps) {
 }
 
 export class ChatLoop {
-	constructor(private readonly session: AgentSession) {}
+	constructor(
+		private readonly createSession: (
+			approveToolCall: ToolApprover,
+		) => Promise<AgentSession>,
+	) {}
 
 	async run(): Promise<void> {
-		const app = render(<ChatApp session={this.session} />);
+		const app = render(<ChatApp createSession={this.createSession} />);
 		await app.waitUntilExit();
 	}
 }

@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import type { ChatCompletion } from "openai/resources/chat/completions";
+import type {
+	ChatCompletion,
+	ChatCompletionMessageToolCall,
+	ChatCompletionTool,
+} from "openai/resources/chat/completions";
 import type { LLMConfig } from "../config";
 import type { ChatMessage } from "../core/message";
 import {
@@ -32,7 +36,11 @@ function createFakeClient(
 	};
 }
 
-function createCompletion(content: string | null): ChatCompletion {
+function createCompletion(options: {
+	content: string | null;
+	toolCalls?: ChatCompletionMessageToolCall[];
+	finishReason?: ChatCompletion.Choice["finish_reason"];
+}): ChatCompletion {
 	return {
 		id: "chatcmpl-test",
 		object: "chat.completion",
@@ -41,23 +49,47 @@ function createCompletion(content: string | null): ChatCompletion {
 		choices: [
 			{
 				index: 0,
-				finish_reason: "stop",
+				finish_reason: options.finishReason ?? "stop",
 				logprobs: null,
 				message: {
 					role: "assistant",
-					content,
+					content: options.content,
 					refusal: null,
+					tool_calls: options.toolCalls,
 				},
 			},
 		],
 	};
 }
 
-function createMockCreate(content: string | null) {
+function createMockCreate(
+	content: string | null,
+	options?: {
+		toolCalls?: ChatCompletionMessageToolCall[];
+		finishReason?: ChatCompletion.Choice["finish_reason"];
+	},
+) {
 	return mock(
 		async (_params: ChatCompletionCreateParams): Promise<ChatCompletion> =>
-			createCompletion(content),
+			createCompletion({
+				content,
+				toolCalls: options?.toolCalls,
+				finishReason: options?.finishReason,
+			}),
 	);
+}
+
+function createFunctionToolCall(
+	argumentsJson = '{"path":"README.md"}',
+): ChatCompletionMessageToolCall {
+	return {
+		id: "call_test",
+		type: "function",
+		function: {
+			name: "read_file",
+			arguments: argumentsJson,
+		},
+	};
 }
 
 describe("LLMProvider", () => {
@@ -72,19 +104,148 @@ describe("LLMProvider", () => {
 	test("returns assistant content", async () => {
 		const response = await provider.chat(messages);
 
-		expect(response).toBe("Hello from the model");
+		expect(response).toEqual({
+			content: "Hello from the model",
+			toolCalls: [],
+			stopReason: "stop",
+		});
 	});
 
 	test("sends configured request parameters", async () => {
-		await provider.chat(messages, { temperature: 0.2 });
+		await provider.chat(messages, [], { temperature: 0.2 });
 
 		expect(create).toHaveBeenCalledTimes(1);
 		expect(create.mock.calls[0]?.[0]).toEqual({
 			model: "gpt-test",
-			messages,
+			messages: [{ role: "user", content: "Hello" }],
+			tools: undefined,
 			temperature: 0.2,
 			max_completion_tokens: 2048,
 		});
+	});
+
+	test("sends tool schemas when provided", async () => {
+		const tools: ChatCompletionTool[] = [
+			{
+				type: "function",
+				function: {
+					name: "read_file",
+					description: "Read a file",
+					parameters: {
+						type: "object",
+						properties: {},
+					},
+				},
+			},
+		];
+
+		await provider.chat(messages, tools);
+
+		expect(create.mock.calls[0]?.[0].tools).toBe(tools);
+	});
+
+	test("converts Sonny assistant and tool messages to OpenAI messages", async () => {
+		const messages: ChatMessage[] = [
+			{
+				role: "assistant",
+				content: "",
+				toolCalls: [
+					{
+						id: "call_test",
+						name: "read_file",
+						parameters: { path: "README.md" },
+					},
+				],
+			},
+			{
+				role: "tool",
+				content: "file content",
+				toolCallId: "call_test",
+			},
+		];
+
+		await provider.chat(messages);
+
+		expect(create.mock.calls[0]?.[0].messages).toEqual([
+			{
+				role: "assistant",
+				content: null,
+				tool_calls: [
+					{
+						id: "call_test",
+						type: "function",
+						function: {
+							name: "read_file",
+							arguments: '{"path":"README.md"}',
+						},
+					},
+				],
+			},
+			{
+				role: "tool",
+				content: "file content",
+				tool_call_id: "call_test",
+			},
+		]);
+	});
+
+	test("omits empty assistant tool calls", async () => {
+		const messages: ChatMessage[] = [
+			{
+				role: "assistant",
+				content: "No tools needed",
+				toolCalls: [],
+			},
+		];
+
+		await provider.chat(messages);
+
+		expect(create.mock.calls[0]?.[0].messages).toEqual([
+			{
+				role: "assistant",
+				content: "No tools needed",
+			},
+		]);
+	});
+
+	test("converts OpenAI tool calls to Sonny tool calls", async () => {
+		create = createMockCreate(null, {
+			toolCalls: [createFunctionToolCall()],
+			finishReason: "tool_calls",
+		});
+		provider = new LLMProvider(config, createFakeClient(create));
+
+		const response = await provider.chat(messages);
+
+		expect(response).toEqual({
+			content: "",
+			toolCalls: [
+				{
+					id: "call_test",
+					name: "read_file",
+					parameters: { path: "README.md" },
+				},
+			],
+			stopReason: "tool_calls",
+		});
+	});
+
+	test("uses empty parameters when tool call arguments are invalid JSON", async () => {
+		create = createMockCreate(null, {
+			toolCalls: [createFunctionToolCall("{not-json")],
+			finishReason: "tool_calls",
+		});
+		provider = new LLMProvider(config, createFakeClient(create));
+
+		const response = await provider.chat(messages);
+
+		expect(response.toolCalls).toEqual([
+			{
+				id: "call_test",
+				name: "read_file",
+				parameters: {},
+			},
+		]);
 	});
 
 	test("throws LLMProviderError when response content is missing", async () => {

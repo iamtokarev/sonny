@@ -36,7 +36,9 @@ You are Sonny.
 			},
 		};
 
-		const session = await createAgentSession(config);
+		const session = await createAgentSession(config, async () => ({
+			approved: true,
+		}));
 
 		expect(session).toBeInstanceOf(AgentSession);
 	});
