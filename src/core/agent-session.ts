@@ -22,6 +22,7 @@ const logger = createLogger("core.agent-session");
 
 export class AgentSession {
 	constructor(
+		private readonly systemPrompt: string,
 		private readonly state: SessionState,
 		private readonly llm: ChatModel,
 		private readonly tools?: ToolRegistry,
@@ -37,7 +38,7 @@ export class AgentSession {
 		this.state.addMessage({ role: "user", content: message });
 
 		for (let iteration = 0; iteration < maxToolIterations; iteration++) {
-			const messages = this.state.buildMessages();
+			const messages = this.state.buildMessages(this.systemPrompt);
 			const toolSchemas = this.tools?.getSchemas() ?? [];
 
 			logger.info("llm.turn.started", {

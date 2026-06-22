@@ -70,4 +70,26 @@ describe("createDefaultToolRegistry", () => {
 			"bash",
 		]);
 	});
+
+	test("registers loadSkill when skills are provided", () => {
+		const registry = createDefaultToolRegistry({
+			skills: [
+				{
+					name: "code-review",
+					description: "Review code",
+					body: "Instructions",
+					path: "/tmp/skills/code-review/SKILL.md",
+					directory: "/tmp/skills/code-review",
+				},
+			],
+		});
+
+		expect(registry.list().map((tool) => tool.name)).toEqual([
+			"readFile",
+			"writeFile",
+			"editFile",
+			"bash",
+			"loadSkill",
+		]);
+	});
 });

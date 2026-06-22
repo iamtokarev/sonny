@@ -25,7 +25,12 @@ program
 		logger.info("chat.command.started");
 
 		const chatLoop = new ChatLoop((approveToolCall, onToolEvent) =>
-			createAgentSession(config, approveToolCall, onToolEvent),
+			createAgentSession({
+				config,
+				approveToolCall,
+				onToolEvent,
+				skillsDirectory: join(config.workspace, "skills"),
+			}),
 		);
 
 		await chatLoop.run();

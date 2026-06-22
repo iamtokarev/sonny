@@ -40,9 +40,12 @@ You are Sonny.
 	test("creates an agent session from config", async () => {
 		const config = await createTestConfig();
 
-		const session = await createAgentSession(config, async () => ({
-			approved: true,
-		}));
+		const session = await createAgentSession({
+			config,
+			approveToolCall: async () => ({
+				approved: true,
+			}),
+		});
 
 		expect(session).toBeInstanceOf(AgentSession);
 	});
@@ -50,13 +53,13 @@ You are Sonny.
 	test("accepts a tool event callback", async () => {
 		const config = await createTestConfig();
 
-		const session = await createAgentSession(
+		const session = await createAgentSession({
 			config,
-			async () => ({
+			approveToolCall: async () => ({
 				approved: true,
 			}),
-			() => {},
-		);
+			onToolEvent: () => {},
+		});
 
 		expect(session).toBeInstanceOf(AgentSession);
 	});

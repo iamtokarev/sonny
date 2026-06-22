@@ -1,19 +1,11 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { AgentDefinition } from "../agents/schemas/agent.schema";
 import { SessionState } from "./session-state";
 
 describe("SessionState", () => {
 	let state: SessionState;
 
-	const agent: AgentDefinition = {
-		id: "sonny",
-		name: "Sonny",
-		description: "Test assistant",
-		instructions: "You are Sonny",
-	};
-
 	beforeEach(() => {
-		state = new SessionState(agent);
+		state = new SessionState();
 	});
 
 	test("starts with no conversation messages", () => {
@@ -23,7 +15,7 @@ describe("SessionState", () => {
 	test("builds messages with the system prompt first", () => {
 		state.addMessage({ role: "user", content: "Hello" });
 
-		expect(state.buildMessages()).toEqual([
+		expect(state.buildMessages("You are Sonny")).toEqual([
 			{ role: "system", content: "You are Sonny" },
 			{ role: "user", content: "Hello" },
 		]);

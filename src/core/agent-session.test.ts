@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { AgentDefinition } from "../agents/schemas/agent.schema";
 import { writeFileTool } from "../tools/builtin/write-file-tool";
 import type { Tool } from "../tools/tool";
 import { ToolExecutor } from "../tools/tool-executor";
@@ -43,22 +42,15 @@ const testTool: Tool = {
 	execute: async () => ({ ok: true, content: "tool output" }),
 };
 
-const agent: AgentDefinition = {
-	id: "sonny",
-	name: "Sonny",
-	description: "Test assistant",
-	instructions: "You are Sonny.",
-};
-
 describe("AgentSession", () => {
 	let state: SessionState;
 	let llm: FakeLLM;
 	let session: AgentSession;
 
 	beforeEach(() => {
-		state = new SessionState(agent);
+		state = new SessionState();
 		llm = new FakeLLM();
-		session = new AgentSession(state, llm);
+		session = new AgentSession("You are Sonny.", state, llm);
 	});
 
 	test("sends system prompt and user message to the LLM", async () => {
@@ -81,7 +73,7 @@ describe("AgentSession", () => {
 	test("adds user and assistant messages to session state", async () => {
 		await session.chat("Hello");
 
-		expect(state.buildMessages()).toEqual([
+		expect(state.buildMessages("You are Sonny.")).toEqual([
 			{ role: "system", content: "You are Sonny." },
 			{ role: "user", content: "Hello" },
 			{ role: "assistant", content: "Hello back" },
@@ -114,7 +106,13 @@ describe("AgentSession", () => {
 				toolCalls: [],
 			},
 		]);
-		const session = new AgentSession(state, llm, tools, toolExecutor);
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			toolExecutor,
+		);
 
 		const response = await session.chat("Use a tool");
 
@@ -167,7 +165,13 @@ describe("AgentSession", () => {
 				toolCalls: [],
 			},
 		]);
-		const session = new AgentSession(state, llm, tools, toolExecutor);
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			toolExecutor,
+		);
 
 		await session.chat("Use a missing tool");
 
@@ -210,7 +214,13 @@ describe("AgentSession", () => {
 				toolCalls: [],
 			},
 		]);
-		const session = new AgentSession(state, llm, tools, toolExecutor);
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			toolExecutor,
+		);
 
 		await session.chat("Write a file");
 
@@ -233,11 +243,11 @@ describe("AgentSession", () => {
 				toolCalls: [],
 			},
 		]);
-		const session = new AgentSession(state, llm);
+		const session = new AgentSession("You are Sonny.", state, llm);
 
 		await session.chat("No tool needed");
 
-		expect(state.buildMessages()).toEqual([
+		expect(state.buildMessages("You are Sonny.")).toEqual([
 			{ role: "system", content: "You are Sonny." },
 			{ role: "user", content: "No tool needed" },
 			{ role: "assistant", content: "Plain answer" },
