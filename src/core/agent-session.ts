@@ -1,6 +1,7 @@
 import type { ToolExecutor } from "../tools/tool-executor";
 import type { ToolRegistry } from "../tools/tool-registry";
 import { createLogger } from "../utils/logger";
+import type { HistoryRecorderSink } from "./history-recorder";
 import type { ChatMessage, ToolCall } from "./message";
 import type { SessionState } from "./session-state";
 
@@ -27,6 +28,7 @@ export class AgentSession {
 		private readonly llm: ChatModel,
 		private readonly tools?: ToolRegistry,
 		private readonly toolExecutor?: ToolExecutor,
+		private readonly historyRecorder?: HistoryRecorderSink,
 	) {}
 
 	async chat(message: string): Promise<string> {
@@ -35,91 +37,101 @@ export class AgentSession {
 			messageCount: this.state.messageCount,
 		});
 
-		this.state.addMessage({ role: "user", content: message });
+		try {
+			this.state.addMessage({ role: "user", content: message });
 
-		for (let iteration = 0; iteration < maxToolIterations; iteration++) {
-			const messages = this.state.buildMessages(this.systemPrompt);
-			const toolSchemas = this.tools?.getSchemas() ?? [];
+			for (let iteration = 0; iteration < maxToolIterations; iteration++) {
+				const messages = this.state.buildMessages(this.systemPrompt);
+				const toolSchemas = this.tools?.getSchemas() ?? [];
 
-			logger.info("llm.turn.started", {
-				iteration,
-				messageCount: messages.length,
-				toolCount: toolSchemas.length,
-			});
-
-			const response = await this.llm.chat(messages, toolSchemas);
-
-			if (typeof response === "string") {
-				this.state.addMessage({ role: "assistant", content: response });
-				logger.info("chat.completed", {
+				logger.info("llm.turn.started", {
 					iteration,
-					contentLength: response.length,
+					messageCount: messages.length,
+					toolCount: toolSchemas.length,
 				});
-				return response;
-			}
 
-			logger.info("llm.turn.completed", {
-				iteration,
-				stopReason: response.stopReason,
-				contentLength: response.content.length,
-				toolCallCount: response.toolCalls.length,
-			});
+				const response = await this.llm.chat(messages, toolSchemas);
 
-			const assistantMessage: ChatMessage = {
-				role: "assistant",
-				content: response.content,
-			};
+				if (typeof response === "string") {
+					this.state.addMessage({ role: "assistant", content: response });
+					logger.info("chat.completed", {
+						iteration,
+						contentLength: response.length,
+					});
+					return response;
+				}
 
-			if (response.toolCalls.length > 0) {
-				assistantMessage.toolCalls = response.toolCalls;
-			}
-
-			this.state.addMessage(assistantMessage);
-
-			if (
-				response.stopReason !== "tool_calls" ||
-				response.toolCalls.length === 0
-			) {
-				logger.info("chat.completed", {
+				logger.info("llm.turn.completed", {
 					iteration,
-					contentLength: response.content.length,
 					stopReason: response.stopReason,
+					contentLength: response.content.length,
+					toolCallCount: response.toolCalls.length,
 				});
-				return response.content;
-			}
 
-			if (this.toolExecutor === undefined) {
-				logger.warn("tool.loop.missing_executor", {
+				const assistantMessage: ChatMessage = {
+					role: "assistant",
+					content: response.content,
+				};
+
+				if (response.toolCalls.length > 0) {
+					assistantMessage.toolCalls = response.toolCalls;
+				}
+
+				this.state.addMessage(assistantMessage);
+
+				if (
+					response.stopReason !== "tool_calls" ||
+					response.toolCalls.length === 0
+				) {
+					logger.info("chat.completed", {
+						iteration,
+						contentLength: response.content.length,
+						stopReason: response.stopReason,
+					});
+					return response.content;
+				}
+
+				if (this.toolExecutor === undefined) {
+					logger.warn("tool.loop.missing_executor", {
+						iteration,
+						toolCallCount: response.toolCalls.length,
+					});
+					return response.content;
+				}
+
+				logger.info("tool.loop.started", {
 					iteration,
 					toolCallCount: response.toolCalls.length,
 				});
-				return response.content;
+
+				for (const toolCall of response.toolCalls) {
+					const toolResult = await this.toolExecutor.execute(toolCall);
+
+					this.state.addMessage({
+						role: "tool",
+						toolCallId: toolCall.id,
+						content: toolResult.ok ? toolResult.content : toolResult.error,
+					});
+				}
 			}
 
-			logger.info("tool.loop.started", {
-				iteration,
-				toolCallCount: response.toolCalls.length,
+			const content =
+				"Tool loop stopped after reaching the maximum number of iterations.";
+
+			logger.warn("tool.loop.max_iterations", {
+				maxToolIterations,
 			});
+			this.state.addMessage({ role: "assistant", content });
 
-			for (const toolCall of response.toolCalls) {
-				const toolResult = await this.toolExecutor.execute(toolCall);
-
-				this.state.addMessage({
-					role: "tool",
-					toolCallId: toolCall.id,
-					content: toolResult.ok ? toolResult.content : toolResult.error,
+			return content;
+		} finally {
+			try {
+				this.historyRecorder?.flush(this.state.getMessages());
+			} catch (error) {
+				logger.warn("history.flush.failed", {
+					error: error instanceof Error ? error.message : String(error),
 				});
 			}
 		}
-
-		const content =
-			"Tool loop stopped after reaching the maximum number of iterations.";
-
-		logger.warn("tool.loop.max_iterations", {
-			maxToolIterations,
-		});
-		this.state.addMessage({ role: "assistant", content });
-
-		return content;
 	}
 }

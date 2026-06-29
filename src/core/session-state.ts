@@ -11,6 +11,10 @@ export class SessionState {
 		return [{ role: "system", content: systemPrompt }, ...this.messages];
 	}
 
+	getMessages(): ChatMessage[] {
+		return [...this.messages];
+	}
+
 	get messageCount(): number {
 		return this.messages.length;
 	}

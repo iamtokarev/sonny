@@ -27,4 +27,19 @@ describe("SessionState", () => {
 
 		expect(state.messageCount).toBe(2);
 	});
+
+	test("returns conversation messages without system prompt", () => {
+		state.addMessage({ role: "user", content: "Hello" });
+
+		expect(state.getMessages()).toEqual([{ role: "user", content: "Hello" }]);
+	});
+
+	test("returns a copy of conversation messages", () => {
+		state.addMessage({ role: "user", content: "Hello" });
+
+		const messages = state.getMessages();
+		messages.push({ role: "assistant", content: "Mutated externally" });
+
+		expect(state.getMessages()).toEqual([{ role: "user", content: "Hello" }]);
+	});
 });

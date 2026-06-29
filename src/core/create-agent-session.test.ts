@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../config";
@@ -62,5 +62,32 @@ You are Sonny.
 		});
 
 		expect(session).toBeInstanceOf(AgentSession);
+	});
+
+	test("creates history session files", async () => {
+		const config = await createTestConfig();
+
+		await createAgentSession({
+			config,
+			approveToolCall: async () => ({
+				approved: true,
+			}),
+		});
+
+		const historyDirectory = join(config.workspace, ".history");
+		const indexContent = await readFile(
+			join(historyDirectory, "index.jsonl"),
+			"utf8",
+		);
+		const sessionFiles = await readdir(join(historyDirectory, "sessions"));
+		const historySession = JSON.parse(indexContent);
+
+		expect(historySession).toMatchObject({
+			agentId: "sonny",
+			title: "Untitled session",
+			messageCount: 0,
+			systemPrompt: expect.stringContaining("You are Sonny."),
+		});
+		expect(sessionFiles).toEqual([`${historySession.id}.jsonl`]);
 	});
 });

@@ -4,6 +4,7 @@ import type { Tool } from "../tools/tool";
 import { ToolExecutor } from "../tools/tool-executor";
 import { ToolRegistry } from "../tools/tool-registry";
 import { AgentSession } from "./agent-session";
+import type { HistoryRecorderSink } from "./history-recorder";
 import type { ChatMessage, ToolCall } from "./message";
 import { SessionState } from "./session-state";
 
@@ -29,6 +30,26 @@ class FakeLLM {
 		this.calls.push(messages);
 		this.toolSchemas.push(tools);
 		return this.responses.shift() ?? "Hello back";
+	}
+}
+
+class ThrowingLLM {
+	async chat(): Promise<string> {
+		throw new Error("LLM failed");
+	}
+}
+
+class FakeHistoryRecorder implements HistoryRecorderSink {
+	readonly flushes: ChatMessage[][] = [];
+
+	constructor(private readonly error?: Error) {}
+
+	flush(messages: ChatMessage[]): void {
+		this.flushes.push([...messages]);
+
+		if (this.error) {
+			throw this.error;
+		}
 	}
 }
 
@@ -252,5 +273,78 @@ describe("AgentSession", () => {
 			{ role: "user", content: "No tool needed" },
 			{ role: "assistant", content: "Plain answer" },
 		]);
+	});
+
+	test("flushes history after successful chat", async () => {
+		const historyRecorder = new FakeHistoryRecorder();
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			historyRecorder,
+		);
+
+		await session.chat("Hello");
+
+		expect(historyRecorder.flushes).toEqual([
+			[
+				{ role: "user", content: "Hello" },
+				{ role: "assistant", content: "Hello back" },
+			],
+		]);
+	});
+
+	test("flushes user message after LLM error", async () => {
+		const historyRecorder = new FakeHistoryRecorder();
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			new ThrowingLLM(),
+			undefined,
+			undefined,
+			historyRecorder,
+		);
+
+		await expect(session.chat("Hello")).rejects.toThrow("LLM failed");
+
+		expect(historyRecorder.flushes).toEqual([
+			[{ role: "user", content: "Hello" }],
+		]);
+	});
+
+	test("does not let history failures replace successful chat response", async () => {
+		const historyRecorder = new FakeHistoryRecorder(
+			new Error("history failed"),
+		);
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			historyRecorder,
+		);
+
+		const response = await session.chat("Hello");
+
+		expect(response).toBe("Hello back");
+	});
+
+	test("does not let history failures mask original chat error", async () => {
+		const historyRecorder = new FakeHistoryRecorder(
+			new Error("history failed"),
+		);
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			new ThrowingLLM(),
+			undefined,
+			undefined,
+			historyRecorder,
+		);
+
+		await expect(session.chat("Hello")).rejects.toThrow("LLM failed");
 	});
 });

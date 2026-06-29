@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { loadAgentDefinition } from "../agents/agents-loader";
 import type { Config } from "../config";
@@ -10,6 +11,8 @@ import type { PermissionHook } from "../tools/hooks/tool-hooks";
 import { type ToolEventHandler, ToolExecutor } from "../tools/tool-executor";
 import { createLogger } from "../utils/logger";
 import { AgentSession } from "./agent-session";
+import { HistoryRecorder } from "./history-recorder";
+import { HistoryStore } from "./history-store";
 import { SessionState } from "./session-state";
 import { buildSystemPrompt } from "./system-prompt-builder";
 
@@ -46,6 +49,16 @@ export async function createAgentSession(
 		],
 	});
 
+	const historyStore = new HistoryStore(
+		join(options.config.workspace, ".history"),
+	);
+	const historySession = historyStore.createSession({
+		id: randomUUID(),
+		agentId: options.config.defaultAgent,
+		systemPrompt,
+	});
+	const historyRecorder = new HistoryRecorder(historyStore, historySession.id);
+
 	const state = new SessionState();
 	const llm = new LLMProvider(options.config.llm);
 	const tools = createDefaultToolRegistry({
@@ -54,5 +67,12 @@ export async function createAgentSession(
 	const hooks = createDefaultToolHooks(options.approveToolCall);
 	const toolExecutor = new ToolExecutor(tools, hooks, options.onToolEvent);
 
-	return new AgentSession(systemPrompt, state, llm, tools, toolExecutor);
+	return new AgentSession(
+		systemPrompt,
+		state,
+		llm,
+		tools,
+		toolExecutor,
+		historyRecorder,
+	);
 }
