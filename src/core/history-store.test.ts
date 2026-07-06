@@ -272,4 +272,45 @@ describe("history-store", () => {
 
 		expect(store.getLatestSession()).toBeUndefined();
 	});
+
+	test("replaces session messages and updates metadata count", async () => {
+		const historyDir = await createTempHistoryDir();
+		const store = new HistoryStore(historyDir);
+		store.createSession({
+			id: _SESSION_ID,
+			agentId: _AGENT_ID,
+			systemPrompt: _SYSTEM_PROMPT,
+		});
+		store.appendMessage(_SESSION_ID, {
+			role: "user",
+			content: "Original question",
+		});
+		store.appendMessage(_SESSION_ID, {
+			role: "assistant",
+			content: "Original answer",
+		});
+
+		store.replaceMessages(_SESSION_ID, [
+			{ role: "user", content: "Original question" },
+			{
+				role: "tool",
+				toolCallId: "call-1",
+				content: "compacted tool output",
+			},
+		]);
+
+		expect(store.readMessages(_SESSION_ID)).toEqual([
+			{ role: "user", content: "Original question" },
+			{
+				role: "tool",
+				toolCallId: "call-1",
+				content: "compacted tool output",
+			},
+		]);
+		expect(store.getSession(_SESSION_ID)).toMatchObject({
+			title: "Original question",
+			messageCount: 2,
+			updatedAt: expect.any(String),
+		});
+	});
 });

@@ -4,6 +4,7 @@ import type { ChatMessage } from "./message";
 
 class FakeHistoryStore {
 	readonly appendedMessages: ChatMessage[] = [];
+	readonly replacedMessageLists: ChatMessage[][] = [];
 	private failureIndex: number | undefined;
 
 	failOnAppend(index: number): void {
@@ -20,6 +21,10 @@ class FakeHistoryStore {
 		}
 
 		this.appendedMessages.push(message);
+	}
+
+	replaceMessages(_sessionId: string, messages: ChatMessage[]): void {
+		this.replacedMessageLists.push([...messages]);
 	}
 }
 
@@ -89,6 +94,30 @@ describe("HistoryRecorder", () => {
 
 		expect(historyStore.appendedMessages).toEqual([
 			{ role: "user", content: "New question" },
+		]);
+	});
+
+	test("replaceMessages resets cursor to rewritten message count", () => {
+		const historyStore = new FakeHistoryStore();
+		const recorder = new HistoryRecorder(historyStore, "session-id");
+		const compactedMessages: ChatMessage[] = [
+			{ role: "user", content: "Question" },
+			{
+				role: "tool",
+				toolCallId: "call-1",
+				content: "compacted output",
+			},
+		];
+
+		recorder.replaceMessages(compactedMessages);
+		recorder.flush([
+			...compactedMessages,
+			{ role: "assistant", content: "Final answer" },
+		]);
+
+		expect(historyStore.replacedMessageLists).toEqual([compactedMessages]);
+		expect(historyStore.appendedMessages).toEqual([
+			{ role: "assistant", content: "Final answer" },
 		]);
 	});
 });

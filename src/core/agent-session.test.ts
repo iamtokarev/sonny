@@ -41,6 +41,7 @@ class ThrowingLLM {
 
 class FakeHistoryRecorder implements HistoryRecorderSink {
 	readonly flushes: ChatMessage[][] = [];
+	readonly replacements: ChatMessage[][] = [];
 
 	constructor(private readonly error?: Error) {}
 
@@ -50,6 +51,10 @@ class FakeHistoryRecorder implements HistoryRecorderSink {
 		if (this.error) {
 			throw this.error;
 		}
+	}
+
+	replaceMessages(messages: ChatMessage[]): void {
+		this.replacements.push([...messages]);
 	}
 }
 
@@ -346,5 +351,90 @@ describe("AgentSession", () => {
 		);
 
 		await expect(session.chat("Hello")).rejects.toThrow("LLM failed");
+	});
+
+	test("prepares context before LLM call and persists changed messages", async () => {
+		state = new SessionState({
+			initialMessages: [
+				{
+					role: "tool",
+					toolCallId: "call-1",
+					content: "large tool output",
+				},
+			],
+		});
+		const compactedMessages: ChatMessage[] = [
+			{
+				role: "tool",
+				toolCallId: "call-1",
+				content: "compact",
+			},
+			{ role: "user", content: "Next question" },
+		];
+		const historyRecorder = new FakeHistoryRecorder();
+		const contextManager = {
+			prepare: async () => ({
+				messages: compactedMessages,
+				tokenCountBefore: 100,
+				tokenCountAfter: 50,
+				thresholdTokens: 75,
+				changed: true,
+				compactedToolResultCount: 1,
+				summaryCompactedMessageCount: 0,
+			}),
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			historyRecorder,
+			contextManager,
+		);
+
+		await session.chat("Next question");
+
+		expect(historyRecorder.replacements).toEqual([compactedMessages]);
+		expect(llm.calls[0]).toEqual([
+			{ role: "system", content: "You are Sonny." },
+			...compactedMessages,
+		]);
+		expect(state.getMessages()).toEqual([
+			...compactedMessages,
+			{ role: "assistant", content: "Hello back" },
+		]);
+	});
+
+	test("does not rewrite history when prepared context is unchanged", async () => {
+		const historyRecorder = new FakeHistoryRecorder();
+		const contextManager = {
+			prepare: async () => ({
+				messages: state.getMessages(),
+				tokenCountBefore: 10,
+				tokenCountAfter: 10,
+				thresholdTokens: 75,
+				changed: false,
+				compactedToolResultCount: 0,
+				summaryCompactedMessageCount: 0,
+			}),
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			historyRecorder,
+			contextManager,
+		);
+
+		await session.chat("Hello");
+
+		expect(historyRecorder.replacements).toEqual([]);
+		expect(llm.calls[0]).toEqual([
+			{ role: "system", content: "You are Sonny." },
+			{ role: "user", content: "Hello" },
+		]);
 	});
 });

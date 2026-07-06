@@ -68,4 +68,19 @@ describe("SessionState", () => {
 			{ role: "user", content: "Previous question" },
 		]);
 	});
+
+	test("replaces conversation messages", () => {
+		state.addMessage({ role: "user", content: "Original" });
+
+		state.replaceMessages([
+			{ role: "user", content: "Compacted question" },
+			{ role: "assistant", content: "Compacted answer" },
+		]);
+
+		expect(state.getMessages()).toEqual([
+			{ role: "user", content: "Compacted question" },
+			{ role: "assistant", content: "Compacted answer" },
+		]);
+		expect(state.messageCount).toBe(2);
+	});
 });

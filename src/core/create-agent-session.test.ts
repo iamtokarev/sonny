@@ -27,6 +27,14 @@ You are Sonny.
 			workspace,
 			defaultAgent: "sonny",
 			agentsPath: "agents",
+			contextCompaction: {
+				contextWindowTokens: 200_000,
+				thresholdRatio: 0.75,
+				maxToolResultChars: 10_000,
+				protectedHeadMessages: 4,
+				protectedTailMessages: 6,
+				summaryMaxTokens: 4000,
+			},
 			llm: {
 				provider: "openai",
 				model: "gpt-test",

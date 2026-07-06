@@ -15,6 +15,10 @@ export class SessionState {
 		this.messages.push(message);
 	}
 
+	replaceMessages(messages: ChatMessage[]): void {
+		this.messages.splice(0, this.messages.length, ...messages);
+	}
+
 	buildMessages(systemPrompt: string): ChatMessage[] {
 		return [{ role: "system", content: systemPrompt }, ...this.messages];
 	}

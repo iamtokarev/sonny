@@ -122,6 +122,45 @@ export class HistoryStore {
 		this.writeSessions(updatedSessions);
 	}
 
+	replaceMessages(sessionId: string, messages: ChatMessage[]): void {
+		const timestamp = new Date().toISOString();
+		const historyMessages = messages.map((message) => ({
+			...message,
+			timestamp,
+		}));
+		const content = historyMessages
+			.map((message) => JSON.stringify(message))
+			.join("\n");
+
+		writeFileSync(
+			this.getSessionPath(sessionId),
+			content ? `${content}\n` : "",
+			"utf8",
+		);
+
+		const firstUserMessage = messages.find(
+			(message) => message.role === "user",
+		);
+		const sessions = this.readSessions();
+		const updatedSessions = sessions.map((session) => {
+			if (session.id !== sessionId) {
+				return session;
+			}
+
+			return {
+				...session,
+				title:
+					session.title === "Untitled session" && firstUserMessage !== undefined
+						? this.createTitleFromMessage(firstUserMessage.content)
+						: session.title,
+				messageCount: messages.length,
+				updatedAt: timestamp,
+			};
+		});
+
+		this.writeSessions(updatedSessions);
+	}
+
 	listSessions(): HistorySession[] {
 		return this.readSessions().toSorted((left, right) =>
 			right.updatedAt.localeCompare(left.updatedAt),

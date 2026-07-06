@@ -1,9 +1,12 @@
 import type { ToolExecutor } from "../tools/tool-executor";
 import type { ToolRegistry } from "../tools/tool-registry";
 import { createLogger } from "../utils/logger";
+import type { ContextManager } from "./context-manager";
 import type { HistoryRecorderSink } from "./history-recorder";
 import type { ChatMessage, ToolCall } from "./message";
 import type { SessionState } from "./session-state";
+
+type ContextPreparer = Pick<ContextManager, "prepare">;
 
 type ChatModelResult = {
 	content: string;
@@ -29,6 +32,7 @@ export class AgentSession {
 		private readonly tools?: ToolRegistry,
 		private readonly toolExecutor?: ToolExecutor,
 		private readonly historyRecorder?: HistoryRecorderSink,
+		private readonly contextManager?: ContextPreparer,
 	) {}
 
 	getMessageCount(): number {
@@ -45,8 +49,9 @@ export class AgentSession {
 			this.state.addMessage({ role: "user", content: message });
 
 			for (let iteration = 0; iteration < maxToolIterations; iteration++) {
-				const messages = this.state.buildMessages(this.systemPrompt);
 				const toolSchemas = this.tools?.getSchemas() ?? [];
+				await this.prepareContext(toolSchemas);
+				const messages = this.state.buildMessages(this.systemPrompt);
 
 				logger.info("llm.turn.started", {
 					iteration,
@@ -137,5 +142,34 @@ export class AgentSession {
 				});
 			}
 		}
+	}
+
+	private async prepareContext(toolSchemas: unknown[]): Promise<void> {
+		const preparedContext = await this.contextManager?.prepare({
+			systemPrompt: this.systemPrompt,
+			messages: this.state.getMessages(),
+			tools: toolSchemas,
+		});
+
+		if (!preparedContext?.changed) {
+			return;
+		}
+
+		this.state.replaceMessages(preparedContext.messages);
+
+		try {
+			this.historyRecorder?.replaceMessages(preparedContext.messages);
+		} catch (error) {
+			logger.warn("history.replace.failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+
+		logger.info("context.compacted", {
+			tokenCountBefore: preparedContext.tokenCountBefore,
+			tokenCountAfter: preparedContext.tokenCountAfter,
+			thresholdTokens: preparedContext.thresholdTokens,
+			compactedToolResultCount: preparedContext.compactedToolResultCount,
+		});
 	}
 }
