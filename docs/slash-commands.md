@@ -29,6 +29,6 @@ Slash commands are deterministic UI commands handled before normal chat input is
 
 - `/help`, `/h`: show available commands.
 - `/context`: show current context usage.
-- `/compact`: compact conversation context manually.
+- `/compact`: compact conversation context manually. See `docs/compaction.md`.
 - `/skills [query]`: list loaded skills.
 - `/session`: show current session metadata.
