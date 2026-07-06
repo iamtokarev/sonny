@@ -114,6 +114,22 @@ describe("ContextManager", () => {
 		expect(result.thresholdTokens).toBe(100);
 	});
 
+	test("inspects context usage", () => {
+		const manager = createContextManager([60]);
+
+		expect(
+			manager.inspect({
+				systemPrompt: "system",
+				messages: [{ role: "user", content: "Hello" }],
+			}),
+		).toEqual({
+			tokenCount: 60,
+			contextWindowTokens: 100,
+			thresholdTokens: 75,
+			thresholdRatio: 0.75,
+		});
+	});
+
 	test("compacts old large middle tool results when over threshold", async () => {
 		const messages: ChatMessage[] = [
 			{ role: "user", content: "head" },
@@ -248,6 +264,71 @@ This is summary.`,
 			},
 			...messages.slice(3),
 		]);
+	});
+
+	test("force summary summarizes below threshold when middle exists", async () => {
+		const summarizer = new FakeSummarizer();
+		const messages: ChatMessage[] = [
+			{ role: "user", content: "head" },
+			{ role: "assistant", content: "old answer" },
+			{ role: "user", content: "old question" },
+			{ role: "user", content: "tail" },
+		];
+		const manager = createContextManager([40, 20], summarizer);
+
+		const result = await manager.prepare(
+			{
+				systemPrompt: "system",
+				messages,
+			},
+			{ forceSummary: true },
+		);
+
+		expect(result.changed).toBe(true);
+		expect(result.summaryCompactedMessageCount).toBe(2);
+		expect(result.tokenCountBefore).toBe(40);
+		expect(result.tokenCountAfter).toBe(20);
+	});
+
+	test("force summary returns unchanged when there is no middle or tool compaction", async () => {
+		const summarizer = new FakeSummarizer();
+		const messages: ChatMessage[] = [
+			{ role: "user", content: "head" },
+			{ role: "assistant", content: "tail" },
+		];
+		const manager = createContextManager([40], summarizer);
+
+		const result = await manager.prepare(
+			{
+				systemPrompt: "system",
+				messages,
+			},
+			{ forceSummary: true },
+		);
+
+		expect(result.changed).toBe(false);
+		expect(result.messages).toBe(messages);
+		expect(summarizer.calls).toEqual([]);
+	});
+
+	test("automatic compaction remains threshold gated", async () => {
+		const summarizer = new FakeSummarizer();
+		const messages: ChatMessage[] = [
+			{ role: "user", content: "head" },
+			{ role: "assistant", content: "old answer" },
+			{ role: "user", content: "old question" },
+			{ role: "user", content: "tail" },
+		];
+		const manager = createContextManager([40], summarizer);
+
+		const result = await manager.prepare({
+			systemPrompt: "system",
+			messages,
+		});
+
+		expect(result.changed).toBe(false);
+		expect(result.messages).toBe(messages);
+		expect(summarizer.calls).toEqual([]);
 	});
 
 	test("returns tool-compacted messages when summarizer is missing", async () => {

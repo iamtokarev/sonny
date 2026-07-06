@@ -55,6 +55,10 @@ class FakeHistoryRecorder implements HistoryRecorderSink {
 
 	replaceMessages(messages: ChatMessage[]): void {
 		this.replacements.push([...messages]);
+
+		if (this.error) {
+			throw this.error;
+		}
 	}
 }
 
@@ -373,6 +377,12 @@ describe("AgentSession", () => {
 		];
 		const historyRecorder = new FakeHistoryRecorder();
 		const contextManager = {
+			inspect: () => ({
+				tokenCount: 100,
+				contextWindowTokens: 200,
+				thresholdTokens: 150,
+				thresholdRatio: 0.75,
+			}),
 			prepare: async () => ({
 				messages: compactedMessages,
 				tokenCountBefore: 100,
@@ -409,6 +419,12 @@ describe("AgentSession", () => {
 	test("does not rewrite history when prepared context is unchanged", async () => {
 		const historyRecorder = new FakeHistoryRecorder();
 		const contextManager = {
+			inspect: () => ({
+				tokenCount: 10,
+				contextWindowTokens: 200,
+				thresholdTokens: 150,
+				thresholdRatio: 0.75,
+			}),
 			prepare: async () => ({
 				messages: state.getMessages(),
 				tokenCountBefore: 10,
@@ -436,5 +452,149 @@ describe("AgentSession", () => {
 			{ role: "system", content: "You are Sonny." },
 			{ role: "user", content: "Hello" },
 		]);
+	});
+
+	test("gets context usage from current state and tool schemas", () => {
+		state.addMessage({ role: "user", content: "Hello" });
+		const tools = new ToolRegistry();
+		tools.register(testTool);
+		const inspectedRequests: unknown[] = [];
+		const contextManager = {
+			inspect: (request: unknown) => {
+				inspectedRequests.push(request);
+				return {
+					tokenCount: 42,
+					contextWindowTokens: 200,
+					thresholdTokens: 150,
+					thresholdRatio: 0.75,
+				};
+			},
+			prepare: async () => ({
+				messages: state.getMessages(),
+				tokenCountBefore: 42,
+				tokenCountAfter: 42,
+				thresholdTokens: 150,
+				changed: false,
+				compactedToolResultCount: 0,
+				summaryCompactedMessageCount: 0,
+			}),
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			undefined,
+			undefined,
+			contextManager,
+		);
+
+		expect(session.getContextUsage()).toEqual({
+			tokenCount: 42,
+			contextWindowTokens: 200,
+			thresholdTokens: 150,
+			thresholdRatio: 0.75,
+		});
+		expect(inspectedRequests).toEqual([
+			{
+				systemPrompt: "You are Sonny.",
+				messages: [{ role: "user", content: "Hello" }],
+				tools: tools.getSchemas(),
+			},
+		]);
+	});
+
+	test("compactContext forces compaction and persists changed messages", async () => {
+		state.addMessage({ role: "user", content: "Hello" });
+		const compactedMessages: ChatMessage[] = [
+			{ role: "user", content: "summary" },
+		];
+		const historyRecorder = new FakeHistoryRecorder();
+		const prepareCalls: unknown[] = [];
+		const contextManager = {
+			inspect: () => ({
+				tokenCount: 100,
+				contextWindowTokens: 200,
+				thresholdTokens: 150,
+				thresholdRatio: 0.75,
+			}),
+			prepare: async (request: unknown, options: unknown) => {
+				prepareCalls.push({ request, options });
+				return {
+					messages: compactedMessages,
+					tokenCountBefore: 100,
+					tokenCountAfter: 20,
+					thresholdTokens: 150,
+					changed: true,
+					compactedToolResultCount: 0,
+					summaryCompactedMessageCount: 3,
+				};
+			},
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			historyRecorder,
+			contextManager,
+		);
+
+		const result = await session.compactContext();
+
+		expect(result.summaryCompactedMessageCount).toBe(3);
+		expect(state.getMessages()).toEqual(compactedMessages);
+		expect(historyRecorder.replacements).toEqual([compactedMessages]);
+		expect(prepareCalls).toEqual([
+			{
+				request: {
+					systemPrompt: "You are Sonny.",
+					messages: [{ role: "user", content: "Hello" }],
+					tools: [],
+				},
+				options: { forceSummary: true },
+			},
+		]);
+	});
+
+	test("compactContext does not let history failures hide compaction result", async () => {
+		const compactedMessages: ChatMessage[] = [
+			{ role: "user", content: "summary" },
+		];
+		const historyRecorder = new FakeHistoryRecorder(
+			new Error("history failed"),
+		);
+		const contextManager = {
+			inspect: () => ({
+				tokenCount: 100,
+				contextWindowTokens: 200,
+				thresholdTokens: 150,
+				thresholdRatio: 0.75,
+			}),
+			prepare: async () => ({
+				messages: compactedMessages,
+				tokenCountBefore: 100,
+				tokenCountAfter: 20,
+				thresholdTokens: 150,
+				changed: true,
+				compactedToolResultCount: 0,
+				summaryCompactedMessageCount: 3,
+			}),
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			historyRecorder,
+			contextManager,
+		);
+
+		const result = await session.compactContext();
+
+		expect(result.tokenCountAfter).toBe(20);
+		expect(state.getMessages()).toEqual(compactedMessages);
 	});
 });

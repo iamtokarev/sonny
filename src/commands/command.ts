@@ -1,3 +1,4 @@
+import type { ContextUsage, PreparedContext } from "../core/context-manager";
 import type { HistorySession } from "../core/history-store";
 import type { Skill } from "../skills/skill";
 
@@ -5,6 +6,8 @@ export interface SlashCommandContext {
 	historySession: HistorySession;
 	skills: Skill[];
 	getMessageCount(): number;
+	getContextUsage(): ContextUsage;
+	compactContext(): Promise<PreparedContext>;
 }
 
 export interface SlashCommand {

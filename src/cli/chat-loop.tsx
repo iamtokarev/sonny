@@ -315,6 +315,8 @@ function ChatApp({ createSession }: ChatAppProps) {
 			historySession: session.historySession,
 			skills: session.skills,
 			getMessageCount: () => session.session.getMessageCount(),
+			getContextUsage: () => session.session.getContextUsage(),
+			compactContext: () => session.session.compactContext(),
 		});
 
 		if (commandResult.handled) {

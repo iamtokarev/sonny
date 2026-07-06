@@ -28,6 +28,17 @@ export type PreparedContext = {
 	summaryCompactedMessageCount: number;
 };
 
+export type ContextUsage = {
+	tokenCount: number;
+	contextWindowTokens: number;
+	thresholdTokens: number;
+	thresholdRatio: number;
+};
+
+export type PrepareContextOptions = {
+	forceSummary?: boolean;
+};
+
 export interface MessagesSummarySplit {
 	head: ChatMessage[];
 	middle: ChatMessage[];
@@ -170,14 +181,24 @@ export function sanitizeToolPairs(messages: ChatMessage[]): ChatMessage[] {
 export class ContextManager {
 	constructor(private readonly options: ContextManagerOptions) {}
 
-	async prepare(request: TokenCountRequest): Promise<PreparedContext> {
-		const thresholdTokens = Math.floor(
-			this.options.contextWindowTokens * this.options.thresholdRatio,
-		);
+	inspect(request: TokenCountRequest): ContextUsage {
+		return {
+			tokenCount: this.options.tokenCounter.countRequestTokens(request),
+			contextWindowTokens: this.options.contextWindowTokens,
+			thresholdTokens: this.getThresholdTokens(),
+			thresholdRatio: this.options.thresholdRatio,
+		};
+	}
+
+	async prepare(
+		request: TokenCountRequest,
+		options: PrepareContextOptions = {},
+	): Promise<PreparedContext> {
+		const thresholdTokens = this.getThresholdTokens();
 		const tokenCountBefore =
 			this.options.tokenCounter.countRequestTokens(request);
 
-		if (tokenCountBefore < thresholdTokens) {
+		if (!options.forceSummary && tokenCountBefore < thresholdTokens) {
 			return {
 				messages: request.messages,
 				tokenCountBefore,
@@ -200,7 +221,10 @@ export class ContextManager {
 					})
 				: tokenCountBefore;
 
-		if (tokenCountAfterToolCompaction < thresholdTokens) {
+		if (
+			!options.forceSummary &&
+			tokenCountAfterToolCompaction < thresholdTokens
+		) {
 			return {
 				messages,
 				tokenCountBefore,
@@ -241,6 +265,12 @@ export class ContextManager {
 			summaryCompactedMessageCount:
 				summaryCompaction.summaryCompactedMessageCount,
 		};
+	}
+
+	private getThresholdTokens(): number {
+		return Math.floor(
+			this.options.contextWindowTokens * this.options.thresholdRatio,
+		);
 	}
 
 	private compactToolMessages(messages: ChatMessage[]): {

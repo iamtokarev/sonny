@@ -1,12 +1,17 @@
 import type { ToolExecutor } from "../tools/tool-executor";
 import type { ToolRegistry } from "../tools/tool-registry";
 import { createLogger } from "../utils/logger";
-import type { ContextManager } from "./context-manager";
+import type {
+	ContextManager,
+	ContextUsage,
+	PreparedContext,
+} from "./context-manager";
 import type { HistoryRecorderSink } from "./history-recorder";
 import type { ChatMessage, ToolCall } from "./message";
 import type { SessionState } from "./session-state";
+import type { TokenCountRequest } from "./token-counter";
 
-type ContextPreparer = Pick<ContextManager, "prepare">;
+type ContextController = Pick<ContextManager, "inspect" | "prepare">;
 
 type ChatModelResult = {
 	content: string;
@@ -32,11 +37,34 @@ export class AgentSession {
 		private readonly tools?: ToolRegistry,
 		private readonly toolExecutor?: ToolExecutor,
 		private readonly historyRecorder?: HistoryRecorderSink,
-		private readonly contextManager?: ContextPreparer,
+		private readonly contextManager?: ContextController,
 	) {}
 
 	getMessageCount(): number {
 		return this.state.messageCount;
+	}
+
+	getContextUsage(): ContextUsage {
+		if (this.contextManager === undefined) {
+			throw new Error("Context manager is not configured.");
+		}
+
+		return this.contextManager.inspect(this.buildContextRequest());
+	}
+
+	async compactContext(): Promise<PreparedContext> {
+		if (this.contextManager === undefined) {
+			throw new Error("Context manager is not configured.");
+		}
+
+		const preparedContext = await this.contextManager.prepare(
+			this.buildContextRequest(),
+			{ forceSummary: true },
+		);
+
+		this.applyPreparedContext(preparedContext);
+
+		return preparedContext;
 	}
 
 	async chat(message: string): Promise<string> {
@@ -151,7 +179,23 @@ export class AgentSession {
 			tools: toolSchemas,
 		});
 
-		if (!preparedContext?.changed) {
+		if (preparedContext === undefined) {
+			return;
+		}
+
+		this.applyPreparedContext(preparedContext);
+	}
+
+	private buildContextRequest(): TokenCountRequest {
+		return {
+			systemPrompt: this.systemPrompt,
+			messages: this.state.getMessages(),
+			tools: this.tools?.getSchemas() ?? [],
+		};
+	}
+
+	private applyPreparedContext(preparedContext: PreparedContext): void {
+		if (!preparedContext.changed) {
 			return;
 		}
 

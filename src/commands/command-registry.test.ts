@@ -15,6 +15,21 @@ function createContext(): SlashCommandContext {
 		},
 		skills: [],
 		getMessageCount: () => 0,
+		getContextUsage: () => ({
+			tokenCount: 0,
+			contextWindowTokens: 200_000,
+			thresholdTokens: 150_000,
+			thresholdRatio: 0.75,
+		}),
+		compactContext: async () => ({
+			messages: [],
+			tokenCountBefore: 0,
+			tokenCountAfter: 0,
+			thresholdTokens: 150_000,
+			changed: false,
+			compactedToolResultCount: 0,
+			summaryCompactedMessageCount: 0,
+		}),
 	};
 }
 
