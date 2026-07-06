@@ -313,4 +313,49 @@ describe("history-store", () => {
 			updatedAt: expect.any(String),
 		});
 	});
+
+	test("preserves original timestamps for surviving head and tail messages", async () => {
+		const historyDir = await createTempHistoryDir();
+		const store = new HistoryStore(historyDir);
+		store.createSession({
+			id: _SESSION_ID,
+			agentId: _AGENT_ID,
+			systemPrompt: _SYSTEM_PROMPT,
+		});
+
+		store.appendMessage(_SESSION_ID, { role: "user", content: "head" });
+		await new Promise((resolve) => setTimeout(resolve, 2));
+		store.appendMessage(_SESSION_ID, { role: "assistant", content: "middle" });
+		await new Promise((resolve) => setTimeout(resolve, 2));
+		store.appendMessage(_SESSION_ID, { role: "user", content: "tail" });
+
+		const readTimestamps = async (): Promise<Record<string, string>> => {
+			const content = await readFile(
+				join(historyDir, "sessions", `${_SESSION_ID}.jsonl`),
+				"utf8",
+			);
+			return Object.fromEntries(
+				content
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line))
+					.map((message) => [message.content, message.timestamp]),
+			);
+		};
+
+		const before = await readTimestamps();
+		await new Promise((resolve) => setTimeout(resolve, 2));
+
+		store.replaceMessages(_SESSION_ID, [
+			{ role: "user", content: "head" },
+			{ role: "user", content: "[summary]" },
+			{ role: "user", content: "tail" },
+		]);
+
+		const after = await readTimestamps();
+		expect(after.head).toBe(before.head);
+		expect(after.tail).toBe(before.tail);
+		expect(after["[summary]"]).not.toBe(before.middle);
+		expect(after["[summary]"]).toEqual(expect.any(String));
+	});
 });

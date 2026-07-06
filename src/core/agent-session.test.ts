@@ -416,6 +416,40 @@ describe("AgentSession", () => {
 		]);
 	});
 
+	test("continues the turn when automatic compaction fails", async () => {
+		state = new SessionState();
+		const historyRecorder = new FakeHistoryRecorder();
+		const contextManager = {
+			inspect: () => ({
+				tokenCount: 100,
+				contextWindowTokens: 200,
+				thresholdTokens: 150,
+				thresholdRatio: 0.75,
+			}),
+			prepare: async () => {
+				throw new Error("summarizer unavailable");
+			},
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			historyRecorder,
+			contextManager,
+		);
+
+		const response = await session.chat("Hello");
+
+		expect(response).toBe("Hello back");
+		expect(historyRecorder.replacements).toEqual([]);
+		expect(state.getMessages()).toEqual([
+			{ role: "user", content: "Hello" },
+			{ role: "assistant", content: "Hello back" },
+		]);
+	});
+
 	test("does not rewrite history when prepared context is unchanged", async () => {
 		const historyRecorder = new FakeHistoryRecorder();
 		const contextManager = {

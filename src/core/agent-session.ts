@@ -173,17 +173,27 @@ export class AgentSession {
 	}
 
 	private async prepareContext(toolSchemas: unknown[]): Promise<void> {
-		const preparedContext = await this.contextManager?.prepare({
-			systemPrompt: this.systemPrompt,
-			messages: this.state.getMessages(),
-			tools: toolSchemas,
-		});
+		// Automatic compaction is a best-effort optimization. A transient
+		// summarizer failure must not abort the user's turn, so degrade to the
+		// current (uncompacted) context instead of propagating the error. The
+		// manual /compact path reports failures separately.
+		try {
+			const preparedContext = await this.contextManager?.prepare({
+				systemPrompt: this.systemPrompt,
+				messages: this.state.getMessages(),
+				tools: toolSchemas,
+			});
 
-		if (preparedContext === undefined) {
-			return;
+			if (preparedContext === undefined) {
+				return;
+			}
+
+			this.applyPreparedContext(preparedContext);
+		} catch (error) {
+			logger.warn("context.prepare.failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
-
-		this.applyPreparedContext(preparedContext);
 	}
 
 	private buildContextRequest(): TokenCountRequest {
