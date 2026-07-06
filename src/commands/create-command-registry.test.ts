@@ -23,6 +23,21 @@ function createContext(): SlashCommandContext {
 			},
 		],
 		getMessageCount: () => 4,
+		getContextUsage: () => ({
+			tokenCount: 50_000,
+			contextWindowTokens: 200_000,
+			thresholdTokens: 150_000,
+			thresholdRatio: 0.75,
+		}),
+		compactContext: async () => ({
+			messages: [],
+			tokenCountBefore: 50_000,
+			tokenCountAfter: 10_000,
+			thresholdTokens: 150_000,
+			changed: true,
+			compactedToolResultCount: 0,
+			summaryCompactedMessageCount: 8,
+		}),
 	};
 }
 
@@ -37,9 +52,43 @@ describe("createDefaultCommandRegistry", () => {
 				type: "message",
 				content: [
 					"/help (/h) - Show available commands.",
+					"/context - Show current context usage.",
+					"/compact - Compact conversation context manually.",
 					"/skills [query] - List loaded skills.",
 					"/session - Show current session information.",
 				].join("\n"),
+			},
+		});
+	});
+
+	test("registers context command", async () => {
+		const registry = createDefaultCommandRegistry();
+		const result = await registry.dispatch("/context", createContext());
+
+		expect(result).toEqual({
+			handled: true,
+			result: {
+				type: "message",
+				content: [
+					"Messages: 4",
+					"Tokens: 50,000",
+					"Threshold: 150,000 (33.3%)",
+					"Window: 200,000 (25.0%)",
+				].join("\n"),
+			},
+		});
+	});
+
+	test("registers compact command", async () => {
+		const registry = createDefaultCommandRegistry();
+		const result = await registry.dispatch("/compact", createContext());
+
+		expect(result).toEqual({
+			handled: true,
+			result: {
+				type: "message",
+				content:
+					"Context compacted. Summarized 8 messages. Tokens: 50,000 -> 10,000.",
 			},
 		});
 	});

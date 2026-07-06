@@ -12,11 +12,14 @@ import type { PermissionHook } from "../tools/hooks/tool-hooks";
 import { type ToolEventHandler, ToolExecutor } from "../tools/tool-executor";
 import { createLogger } from "../utils/logger";
 import { AgentSession } from "./agent-session";
+import { ContextManager } from "./context-manager";
 import { HistoryRecorder } from "./history-recorder";
 import { type HistorySession, HistoryStore } from "./history-store";
+import { LlmContextSummarizer } from "./llm-context-summarizer";
 import type { ChatMessage } from "./message";
 import { SessionState } from "./session-state";
 import { buildSystemPrompt } from "./system-prompt-builder";
+import { GptTokenizerTokenCounter } from "./token-counter";
 
 export type CreateAgentSessionMode = "new" | "resume" | "continue";
 
@@ -115,6 +118,11 @@ export async function createAgentSession(
 	});
 	const hooks = createDefaultToolHooks(options.approveToolCall);
 	const toolExecutor = new ToolExecutor(tools, hooks, options.onToolEvent);
+	const contextManager = new ContextManager({
+		tokenCounter: new GptTokenizerTokenCounter(),
+		summarizer: new LlmContextSummarizer(llm),
+		...options.config.contextCompaction,
+	});
 
 	return {
 		session: new AgentSession(
@@ -124,6 +132,7 @@ export async function createAgentSession(
 			tools,
 			toolExecutor,
 			historyRecorder,
+			contextManager,
 		),
 		historySession,
 		restoredMessageCount,

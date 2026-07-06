@@ -7,3 +7,11 @@ llm:
 
 defaultAgent: sonny
 agentsPath: agents
+
+contextCompaction:
+  contextWindowTokens: 200000
+  thresholdRatio: 0.75
+  maxToolResultChars: 10000
+  protectedHeadMessages: 4
+  protectedTailMessages: 6
+  summaryMaxTokens: 4000

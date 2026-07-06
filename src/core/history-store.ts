@@ -122,6 +122,51 @@ export class HistoryStore {
 		this.writeSessions(updatedSessions);
 	}
 
+	replaceMessages(sessionId: string, messages: ChatMessage[]): void {
+		const timestamp = new Date().toISOString();
+		const previousMessages = this.readHistoryMessages(sessionId);
+		const timestamps = resolveReplacementTimestamps(
+			previousMessages,
+			messages,
+			timestamp,
+		);
+		const historyMessages = messages.map((message, index) => ({
+			...message,
+			timestamp: timestamps[index] ?? timestamp,
+		}));
+		const content = historyMessages
+			.map((message) => JSON.stringify(message))
+			.join("\n");
+
+		writeFileSync(
+			this.getSessionPath(sessionId),
+			content ? `${content}\n` : "",
+			"utf8",
+		);
+
+		const firstUserMessage = messages.find(
+			(message) => message.role === "user",
+		);
+		const sessions = this.readSessions();
+		const updatedSessions = sessions.map((session) => {
+			if (session.id !== sessionId) {
+				return session;
+			}
+
+			return {
+				...session,
+				title:
+					session.title === "Untitled session" && firstUserMessage !== undefined
+						? this.createTitleFromMessage(firstUserMessage.content)
+						: session.title,
+				messageCount: messages.length,
+				updatedAt: timestamp,
+			};
+		});
+
+		this.writeSessions(updatedSessions);
+	}
+
 	listSessions(): HistorySession[] {
 		return this.readSessions().toSorted((left, right) =>
 			right.updatedAt.localeCompare(left.updatedAt),
@@ -137,6 +182,12 @@ export class HistoryStore {
 	}
 
 	readMessages(sessionId: string): ChatMessage[] {
+		return this.readHistoryMessages(sessionId).map(
+			({ timestamp: _timestamp, ...message }) => message,
+		);
+	}
+
+	private readHistoryMessages(sessionId: string): HistoryMessage[] {
 		const sessionPath = this.getSessionPath(sessionId);
 		if (!existsSync(sessionPath)) {
 			return [];
@@ -146,11 +197,75 @@ export class HistoryStore {
 			.split("\n")
 			.map((line) => line.trim())
 			.filter(Boolean)
-			.map((line) => {
-				const { timestamp: _timestamp, ...message } = JSON.parse(
-					line,
-				) as HistoryMessage;
-				return message;
-			});
+			.map((line) => JSON.parse(line) as HistoryMessage);
 	}
+}
+
+/**
+ * Compaction rewrites history as `head (original prefix) + summary (new) +
+ * tail (original suffix)`. Preserve each surviving message's original timestamp
+ * by matching the longest common prefix and suffix against the previous
+ * records; only genuinely new middle messages (the summary) get `fallback`.
+ */
+function resolveReplacementTimestamps(
+	previous: HistoryMessage[],
+	next: ChatMessage[],
+	fallback: string,
+): string[] {
+	let prefix = 0;
+	while (
+		prefix < next.length &&
+		prefix < previous.length &&
+		sameMessage(next[prefix], previous[prefix])
+	) {
+		prefix += 1;
+	}
+
+	let suffix = 0;
+	while (
+		suffix < next.length - prefix &&
+		suffix < previous.length - prefix &&
+		sameMessage(
+			next[next.length - 1 - suffix],
+			previous[previous.length - 1 - suffix],
+		)
+	) {
+		suffix += 1;
+	}
+
+	return next.map((_message, index) => {
+		if (index < prefix) {
+			return previous[index]?.timestamp ?? fallback;
+		}
+
+		if (index >= next.length - suffix) {
+			const previousIndex = previous.length - (next.length - index);
+			return previous[previousIndex]?.timestamp ?? fallback;
+		}
+
+		return fallback;
+	});
+}
+
+function sameMessage(
+	left: ChatMessage | undefined,
+	right: ChatMessage | undefined,
+): boolean {
+	if (left === undefined || right === undefined) {
+		return false;
+	}
+
+	if (left.role !== right.role || left.content !== right.content) {
+		return false;
+	}
+
+	if (left.role === "tool" && right.role === "tool") {
+		return left.toolCallId === right.toolCallId;
+	}
+
+	if (left.role === "assistant" && right.role === "assistant") {
+		return JSON.stringify(left.toolCalls) === JSON.stringify(right.toolCalls);
+	}
+
+	return true;
 }

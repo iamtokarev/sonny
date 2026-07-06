@@ -1,10 +1,14 @@
 import type { HistoryStore } from "./history-store";
 import type { ChatMessage } from "./message";
 
-type HistoryMessageAppender = Pick<HistoryStore, "appendMessage">;
+type HistoryMessageStore = Pick<
+	HistoryStore,
+	"appendMessage" | "replaceMessages"
+>;
 
 export type HistoryRecorderSink = {
 	flush(messages: ChatMessage[]): void;
+	replaceMessages(messages: ChatMessage[]): void;
 };
 
 export type HistoryRecorderOptions = {
@@ -15,7 +19,7 @@ export class HistoryRecorder implements HistoryRecorderSink {
 	private flushedMessageCount: number;
 
 	constructor(
-		private readonly historyStore: HistoryMessageAppender,
+		private readonly historyStore: HistoryMessageStore,
 		private readonly sessionId: string,
 		options: HistoryRecorderOptions = {},
 	) {
@@ -36,5 +40,10 @@ export class HistoryRecorder implements HistoryRecorderSink {
 			this.historyStore.appendMessage(this.sessionId, message);
 			this.flushedMessageCount = index + 1;
 		}
+	}
+
+	replaceMessages(messages: ChatMessage[]): void {
+		this.historyStore.replaceMessages(this.sessionId, messages);
+		this.flushedMessageCount = messages.length;
 	}
 }
