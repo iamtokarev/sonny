@@ -1,4 +1,4 @@
-import matter from "gray-matter";
+import { parseFrontmatter } from "../parsing";
 import type { Skill } from "./skill";
 
 export type ParseSkillResult =
@@ -17,7 +17,8 @@ export function parseSkill(
 	options: { path: string; directoryName: string },
 ): ParseSkillResult {
 	try {
-		const { data, content } = matter(fileContent);
+		const { frontmatter, body } = parseFrontmatter(fileContent);
+		const data = (frontmatter ?? {}) as Record<string, unknown>;
 
 		const name = typeof data.name === "string" ? data.name.trim() : "";
 		if (!name) {
@@ -34,7 +35,6 @@ export function parseSkill(
 			);
 		}
 
-		const body = content.trim();
 		if (!body) {
 			return failedParsing(`Skill at ${options.path} is missing instructions`);
 		}

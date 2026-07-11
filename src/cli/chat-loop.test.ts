@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { CreateAgentSessionResult } from "../core/create-agent-session";
-import type { HistorySession } from "../core/history-store";
+import type { HistorySession } from "../history";
+import type { CreateAgentSessionResult } from "../runtime";
 import {
 	createRestoredUiMessages,
 	formatSessionExitSummary,

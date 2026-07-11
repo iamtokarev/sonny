@@ -1,4 +1,4 @@
-import type { ToolCall } from "../core/message";
+import type { ToolCall } from "../domain";
 import { createLogger } from "../utils/logger";
 import type {
 	BaseToolHookContext,

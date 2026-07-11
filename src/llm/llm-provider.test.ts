@@ -5,7 +5,7 @@ import type {
 	ChatCompletionTool,
 } from "openai/resources/chat/completions";
 import type { LLMConfig } from "../config";
-import type { ChatMessage } from "../core/message";
+import type { ChatMessage } from "../domain";
 import {
 	type ChatCompletionClient,
 	type ChatCompletionCreateParams,

@@ -1,4 +1,4 @@
-import type { ChatMessage } from "./message";
+import type { ChatMessage } from "../domain";
 
 export type ContextSummaryInput = {
 	messages: ChatMessage[];

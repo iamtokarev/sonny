@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { PreparedContext } from "../../core/context-manager";
+import type { PreparedContext } from "../../context";
 import type { SlashCommandContext } from "../command";
 import { createCompactCommand } from "./compact-command";
 

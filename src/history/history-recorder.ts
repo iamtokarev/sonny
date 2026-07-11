@@ -1,5 +1,5 @@
+import type { ChatMessage } from "../domain";
 import type { HistoryStore } from "./history-store";
-import type { ChatMessage } from "./message";
 
 type HistoryMessageStore = Pick<
 	HistoryStore,

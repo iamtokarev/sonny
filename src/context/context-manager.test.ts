@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { ChatMessage } from "../domain";
 import {
 	CONTEXT_SUMMARY_HEADER,
 	ContextManager,
@@ -11,7 +12,6 @@ import type {
 	ContextSummarizer,
 	ContextSummaryInput,
 } from "./context-summarizer";
-import type { ChatMessage } from "./message";
 import type { TokenCounter, TokenCountRequest } from "./token-counter";
 
 class FakeTokenCounter implements TokenCounter {

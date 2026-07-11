@@ -1,8 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { AgentSession, buildSystemPrompt, SessionState } from "../agent";
 import { loadAgentDefinition } from "../agents/agents-loader";
 import type { Config } from "../config";
-import { LLMProvider } from "../providers/llm-provider";
+import {
+	ContextManager,
+	GptTokenizerTokenCounter,
+	LlmContextSummarizer,
+} from "../context";
+import type { ChatMessage } from "../domain";
+import { HistoryRecorder, type HistorySession, HistoryStore } from "../history";
+import { LLMProvider } from "../llm";
 import { buildSkillsPrompt } from "../skills/build-skills-prompt";
 import { loadSkills } from "../skills/load-skills";
 import type { Skill } from "../skills/skill";
@@ -11,15 +19,6 @@ import { createDefaultToolHooks } from "../tools/hooks/default-tool-hooks";
 import type { PermissionHook } from "../tools/hooks/tool-hooks";
 import { type ToolEventHandler, ToolExecutor } from "../tools/tool-executor";
 import { createLogger } from "../utils/logger";
-import { AgentSession } from "./agent-session";
-import { ContextManager } from "./context-manager";
-import { HistoryRecorder } from "./history-recorder";
-import { type HistorySession, HistoryStore } from "./history-store";
-import { LlmContextSummarizer } from "./llm-context-summarizer";
-import type { ChatMessage } from "./message";
-import { SessionState } from "./session-state";
-import { buildSystemPrompt } from "./system-prompt-builder";
-import { GptTokenizerTokenCounter } from "./token-counter";
 
 export type CreateAgentSessionMode = "new" | "resume" | "continue";
 

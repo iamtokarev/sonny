@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { parseDefinition } from "../definitions/parse-definition";
+import { parseFrontmatter } from "../parsing";
 import {
 	type AgentDefinition,
 	AgentFrontmatterSchema,
@@ -12,7 +12,7 @@ export async function loadAgentDefinition(
 	const agentFilePath = join(agentsPath, agentId, "AGENT.md");
 	const definitionFile = await Bun.file(agentFilePath).text();
 
-	const { frontmatter, body } = parseDefinition(definitionFile);
+	const { frontmatter, body } = parseFrontmatter(definitionFile);
 	const agentFrontmatter = AgentFrontmatterSchema.parse(frontmatter);
 
 	return {

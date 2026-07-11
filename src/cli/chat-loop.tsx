@@ -2,8 +2,8 @@ import { Box, render, Text, useApp, useInput } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SlashCommandResult } from "../commands/command";
 import { createDefaultCommandRegistry } from "../commands/create-command-registry";
-import type { CreateAgentSessionResult } from "../core/create-agent-session";
-import type { ChatMessage, ToolCall } from "../core/message";
+import type { ChatMessage, ToolCall } from "../domain";
+import type { CreateAgentSessionResult } from "../runtime";
 import type {
 	ToolApprovalDecision,
 	ToolApprovalRequest,

@@ -1,5 +1,5 @@
 import { countTokens } from "gpt-tokenizer/model/gpt-4o";
-import type { ChatMessage } from "./message";
+import type { ChatMessage } from "../domain";
 
 export type TokenCountRequest = {
 	systemPrompt: string;

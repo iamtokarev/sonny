@@ -7,7 +7,7 @@ import type {
 	ChatCompletionTool,
 } from "openai/resources/chat/completions";
 import type { LLMConfig } from "../config";
-import type { ChatMessage, ToolCall } from "../core/message";
+import type { ChatMessage, ToolCall } from "../domain";
 import { createLogger } from "../utils/logger";
 
 type ChatOptions = Partial<

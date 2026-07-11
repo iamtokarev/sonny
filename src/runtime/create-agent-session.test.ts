@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AgentSession } from "../agent";
 import type { Config } from "../config";
-import { AgentSession } from "./agent-session";
+import { HistoryStore } from "../history";
 import { createAgentSession } from "./create-agent-session";
-import { HistoryStore } from "./history-store";
 
 describe("createAgentSession", () => {
 	async function createTestConfig(): Promise<Config> {

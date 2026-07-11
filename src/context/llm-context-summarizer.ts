@@ -1,8 +1,8 @@
+import type { ChatMessage, ToolCall } from "../domain";
 import type {
 	ContextSummarizer,
 	ContextSummaryInput,
 } from "./context-summarizer";
-import type { ChatMessage, ToolCall } from "./message";
 
 type SummaryChatModel = {
 	chat(
