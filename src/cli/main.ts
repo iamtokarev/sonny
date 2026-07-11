@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Command } from "commander";
 import { config } from "../config";
-import { createAgentSession } from "../core/create-agent-session";
+import { createAgentSession } from "../runtime";
 import { configureLogger, createLogger } from "../utils/logger";
 import { ChatLoop } from "./chat-loop";
 import {

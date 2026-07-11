@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import type { ChatMessage, ToolCall } from "../domain";
+import type { HistoryRecorderSink } from "../history";
 import { writeFileTool } from "../tools/builtin/write-file-tool";
 import type { Tool } from "../tools/tool";
 import { ToolExecutor } from "../tools/tool-executor";
 import { ToolRegistry } from "../tools/tool-registry";
 import { AgentSession } from "./agent-session";
-import type { HistoryRecorderSink } from "./history-recorder";
-import type { ChatMessage, ToolCall } from "./message";
 import { SessionState } from "./session-state";
 
 type FakeLLMResult = {

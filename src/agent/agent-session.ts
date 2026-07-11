@@ -1,15 +1,15 @@
-import type { ToolExecutor } from "../tools/tool-executor";
-import type { ToolRegistry } from "../tools/tool-registry";
-import { createLogger } from "../utils/logger";
 import type {
 	ContextManager,
 	ContextUsage,
 	PreparedContext,
-} from "./context-manager";
-import type { HistoryRecorderSink } from "./history-recorder";
-import type { ChatMessage, ToolCall } from "./message";
+	TokenCountRequest,
+} from "../context";
+import type { ChatMessage, ToolCall } from "../domain";
+import type { HistoryRecorderSink } from "../history";
+import type { ToolExecutor } from "../tools/tool-executor";
+import type { ToolRegistry } from "../tools/tool-registry";
+import { createLogger } from "../utils/logger";
 import type { SessionState } from "./session-state";
-import type { TokenCountRequest } from "./token-counter";
 
 type ContextController = Pick<ContextManager, "inspect" | "prepare">;
 

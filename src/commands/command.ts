@@ -1,5 +1,5 @@
-import type { ContextUsage, PreparedContext } from "../core/context-manager";
-import type { HistorySession } from "../core/history-store";
+import type { ContextUsage, PreparedContext } from "../context";
+import type { HistorySession } from "../history";
 import type { Skill } from "../skills/skill";
 
 export interface SlashCommandContext {

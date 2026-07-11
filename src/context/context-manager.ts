@@ -1,5 +1,5 @@
+import type { ChatMessage, ToolMessage } from "../domain";
 import type { ContextSummarizer } from "./context-summarizer";
-import type { ChatMessage, ToolMessage } from "./message";
 import type { TokenCounter, TokenCountRequest } from "./token-counter";
 
 export const TOOL_OUTPUT_COMPACTION_MARKER = "[Tool output compacted:";

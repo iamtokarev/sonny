@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { ChatMessage } from "../domain";
 import { HistoryRecorder } from "./history-recorder";
-import type { ChatMessage } from "./message";
 
 class FakeHistoryStore {
 	readonly appendedMessages: ChatMessage[] = [];

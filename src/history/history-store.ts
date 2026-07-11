@@ -6,7 +6,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import type { ChatMessage } from "./message";
+import type { ChatMessage } from "../domain";
 
 export type HistorySession = {
 	id: string;

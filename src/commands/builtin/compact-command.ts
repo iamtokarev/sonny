@@ -1,4 +1,4 @@
-import type { PreparedContext } from "../../core/context-manager";
+import type { PreparedContext } from "../../context";
 import type { SlashCommand } from "../command";
 
 function formatNumber(value: number): string {

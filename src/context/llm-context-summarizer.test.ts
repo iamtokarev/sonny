@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { ChatMessage } from "../domain";
 import { LlmContextSummarizer } from "./llm-context-summarizer";
-import type { ChatMessage } from "./message";
 
 type SummaryCall = {
 	messages: ChatMessage[];

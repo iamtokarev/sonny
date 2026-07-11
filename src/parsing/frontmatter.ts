@@ -1,18 +1,18 @@
 import matter from "gray-matter";
 
-export type ParsedDefinition = {
+export type ParsedFrontmatter = {
 	frontmatter: unknown;
 	body: string;
 };
 
-export class DefinitionParseError extends Error {
+export class FrontmatterParseError extends Error {
 	constructor(message: string, options?: { cause?: unknown }) {
 		super(message, options);
-		this.name = "DefinitionParseError";
+		this.name = "FrontmatterParseError";
 	}
 }
 
-export function parseDefinition(fileContent: string): ParsedDefinition {
+export function parseFrontmatter(fileContent: string): ParsedFrontmatter {
 	try {
 		const { data, content } = matter(fileContent);
 
@@ -21,7 +21,7 @@ export function parseDefinition(fileContent: string): ParsedDefinition {
 			body: content.trim(),
 		};
 	} catch (error) {
-		throw new DefinitionParseError("Failed to parse definition frontmatter", {
+		throw new FrontmatterParseError("Failed to parse frontmatter", {
 			cause: error,
 		});
 	}
