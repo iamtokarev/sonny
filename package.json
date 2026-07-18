@@ -15,19 +15,20 @@
 	},
 	"licence": "MIT",
 	"devDependencies": {
-		"@biomejs/biome": "^2.4.16",
+		"@biomejs/biome": "^2.5.3",
 		"@types/bun": "latest",
-		"@types/react": "^19.2.15",
-		"typescript": "^5"
+		"@types/react": "^19.2.17",
+		"typescript": "^5.9.3"
 	},
 	"dependencies": {
+		"@tavily/core": "^0.7.6",
 		"commander": "^15.0.0",
 		"dotenv": "^17.4.2",
 		"gpt-tokenizer": "^3.4.0",
 		"gray-matter": "^4.0.3",
-		"ink": "^7.0.5",
-		"openai": "^6.39.1",
-		"react": "^19.2.6",
+		"ink": "^7.1.0",
+		"openai": "^6.46.0",
+		"react": "^19.2.7",
 		"yaml": "^2.9.0",
 		"zod": "^4.4.3"
 	}

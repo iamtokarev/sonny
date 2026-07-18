@@ -15,6 +15,9 @@ export const ConfigSchema = z.object({
 	contextCompaction: ContextCompactionConfigSchema.default(
 		DEFAULT_CONTEXT_COMPACTION_CONFIG,
 	),
+
+	// web search
+	tavilyApiKey: z.string().optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

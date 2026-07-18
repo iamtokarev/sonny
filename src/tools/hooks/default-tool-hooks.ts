@@ -9,6 +9,7 @@ import type {
 	ToolHooks,
 	TransformToolResultHook,
 } from "./tool-hooks";
+import { webUrlPolicyPreToolHook } from "./web-url-policy-hooks";
 
 const logger = createLogger("tools.hooks");
 const maxToolOutputLength = 20_000;
@@ -84,7 +85,11 @@ export const reduceLargeToolOutput: TransformToolResultHook = ({
 
 export function createDefaultToolHooks(permission: PermissionHook): ToolHooks {
 	return {
-		preTool: [filePolicyPreToolHook, askBeforeEveryTool],
+		preTool: [
+			filePolicyPreToolHook,
+			webUrlPolicyPreToolHook,
+			askBeforeEveryTool,
+		],
 		permission,
 		postTool: [],
 		toolFailure: [logToolFailure],
