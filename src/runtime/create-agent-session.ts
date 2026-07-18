@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { tavily } from "@tavily/core";
 import { AgentSession, buildSystemPrompt, SessionState } from "../agent";
 import { loadAgentDefinition } from "../agents/agents-loader";
 import type { Config } from "../config";
@@ -19,6 +20,7 @@ import { createDefaultToolHooks } from "../tools/hooks/default-tool-hooks";
 import type { PermissionHook } from "../tools/hooks/tool-hooks";
 import { type ToolEventHandler, ToolExecutor } from "../tools/tool-executor";
 import { createLogger } from "../utils/logger";
+import { TavilyWebProvider } from "../web/tavily-web-provider";
 
 export type CreateAgentSessionMode = "new" | "resume" | "continue";
 
@@ -112,8 +114,13 @@ export async function createAgentSession(
 		initialMessages: restoredMessages,
 	});
 	const llm = new LLMProvider(options.config.llm);
+	const webProvider = options.config.tavilyApiKey
+		? new TavilyWebProvider(tavily({ apiKey: options.config.tavilyApiKey }))
+		: undefined;
 	const tools = createDefaultToolRegistry({
 		skills: skillsResult.skills,
+		webSearchProvider: webProvider,
+		webReadProvider: webProvider,
 	});
 	const hooks = createDefaultToolHooks(options.approveToolCall);
 	const toolExecutor = new ToolExecutor(tools, hooks, options.onToolEvent);

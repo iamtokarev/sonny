@@ -6,6 +6,7 @@ type UnknownRecord = Record<string, unknown>;
 
 type ParseConfigOptions = {
 	llmApiKey?: string;
+	tavilyApiKey?: string;
 };
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -16,7 +17,7 @@ function applyEnvOverrides(
 	data: unknown,
 	options: ParseConfigOptions,
 ): unknown {
-	if (!options.llmApiKey || !isRecord(data)) {
+	if ((!options.llmApiKey && !options.tavilyApiKey) || !isRecord(data)) {
 		return data;
 	}
 
@@ -24,9 +25,10 @@ function applyEnvOverrides(
 
 	return {
 		...data,
+		...(options.tavilyApiKey ? { tavilyApiKey: options.tavilyApiKey } : {}),
 		llm: {
 			...llm,
-			apiKey: options.llmApiKey,
+			...(options.llmApiKey ? { apiKey: options.llmApiKey } : {}),
 		},
 	};
 }

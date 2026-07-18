@@ -54,6 +54,49 @@ describe("default tool hooks", () => {
 		}
 	});
 
+	test("web URL policy denies non-public destinations before permission", async () => {
+		let executed = false;
+		let permissionCalled = false;
+		const registry = new ToolRegistry();
+		const webReadTool: Tool = {
+			name: "webRead",
+			description: "Read a web page",
+			parameters: {
+				type: "object",
+				properties: {},
+			},
+			execute: async () => {
+				executed = true;
+				return { ok: true, content: "private content" };
+			},
+		};
+		registry.register(webReadTool);
+
+		const executor = new ToolExecutor(
+			registry,
+			createDefaultToolHooks(async () => {
+				permissionCalled = true;
+				return { approved: true };
+			}),
+		);
+
+		const result = await executor.execute({
+			id: "call_test",
+			name: "webRead",
+			parameters: { url: "http://169.254.169.254/latest/meta-data" },
+		});
+
+		expect(executed).toBe(false);
+		expect(permissionCalled).toBe(false);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toContain("BLOCKED");
+			expect(result.error).toContain(
+				"Access denied: refusing web requests to local or non-public destinations",
+			);
+		}
+	});
+
 	test("enriches non-blocked failures for the model", async () => {
 		const result = await enrichFailureForModel({
 			toolCallId: "call_test",

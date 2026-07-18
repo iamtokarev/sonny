@@ -17,5 +17,6 @@ export async function loadConfig(path: string): Promise<Config> {
 
 	return parseConfig(yamlConfig, {
 		llmApiKey: process.env.LLM_API_KEY,
+		tavilyApiKey: process.env.TAVILY_API_KEY,
 	});
 }

@@ -33,6 +33,23 @@ describe("parseConfig", () => {
 		});
 	});
 
+	test("applies Tavily API key without an LLM API key override", () => {
+		const config = parseConfig(
+			{
+				llm: {
+					provider: "openai",
+					model: "gpt-4.1",
+					apiKey: "configured-llm-key",
+				},
+				defaultAgent: "sonny",
+			},
+			{ tavilyApiKey: "test-tavily-key" },
+		);
+
+		expect(config.llm.apiKey).toBe("configured-llm-key");
+		expect(config.tavilyApiKey).toBe("test-tavily-key");
+	});
+
 	test("loads explicit context compaction config", () => {
 		const config = parseConfig(
 			{
