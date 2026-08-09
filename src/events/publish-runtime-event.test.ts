@@ -16,38 +16,49 @@ function createEvent(): TurnStartedEvent {
 }
 
 describe("publishRuntimeEvent", () => {
-	test("forwards the event to the publisher", async () => {
-		const publish = mock(async () => {});
+	test("forwards the event to the publisher", () => {
+		const publish = mock(() => {});
 		const publisher: RuntimeEventPublisher = { publish };
 		const event = createEvent();
 
-		await publishRuntimeEvent(publisher, event);
+		publishRuntimeEvent(publisher, event);
 
 		expect(publish).toHaveBeenCalledTimes(1);
 		expect(publish).toHaveBeenCalledWith(event);
 	});
 
-	test("resolves when the publisher throws synchronously", async () => {
+	test("does not throw when the publisher throws synchronously", () => {
 		const publisher: RuntimeEventPublisher = {
 			publish() {
 				throw new Error("publisher failed");
 			},
 		};
 
-		await expect(
-			publishRuntimeEvent(publisher, createEvent()),
-		).resolves.toBeUndefined();
+		expect(() => publishRuntimeEvent(publisher, createEvent())).not.toThrow();
 	});
 
-	test("resolves when the publisher rejects asynchronously", async () => {
+	test("does not wait when a publisher returns a promise", () => {
+		let completed = false;
+		const publisher: RuntimeEventPublisher = {
+			async publish() {
+				await Promise.resolve();
+				completed = true;
+			},
+		};
+
+		publishRuntimeEvent(publisher, createEvent());
+
+		expect(completed).toBe(false);
+	});
+
+	test("observes an accidental asynchronous publisher rejection", async () => {
 		const publisher: RuntimeEventPublisher = {
 			async publish() {
 				throw new Error("publisher failed asynchronously");
 			},
 		};
 
-		await expect(
-			publishRuntimeEvent(publisher, createEvent()),
-		).resolves.toBeUndefined();
+		expect(() => publishRuntimeEvent(publisher, createEvent())).not.toThrow();
+		await Promise.resolve();
 	});
 });

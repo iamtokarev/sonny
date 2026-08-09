@@ -1,9 +1,9 @@
 import type { RuntimeEvent } from "./runtime-event";
 
-export type RuntimeEventHandler = (event: RuntimeEvent) => void | Promise<void>;
+export type RuntimeEventHandler = (event: RuntimeEvent) => void;
 
 export interface RuntimeEventPublisher {
-	publish(event: RuntimeEvent): Promise<void>;
+	publish(event: RuntimeEvent): void;
 }
 
 export interface RuntimeEventBus extends RuntimeEventPublisher {

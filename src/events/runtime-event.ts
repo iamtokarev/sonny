@@ -1,4 +1,5 @@
 import { randomUUIDv7 } from "bun";
+import type { ToolCompletionStatus } from "../domain";
 import type { RuntimeSource, TurnContext } from "./turn-context";
 
 interface RuntimeEventBase {
@@ -42,7 +43,7 @@ export interface ToolCompletedEvent extends RuntimeEventBase {
 	readonly toolCallId: string;
 	readonly toolName: string;
 	readonly parameters: unknown;
-	readonly ok: boolean;
+	readonly status: ToolCompletionStatus;
 	readonly content: string;
 	readonly durationMs: number;
 }

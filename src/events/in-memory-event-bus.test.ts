@@ -23,23 +23,23 @@ beforeEach(() => {
 });
 
 describe("InMemoryEventBus", () => {
-	test("delivers an event to one subscriber", async () => {
+	test("delivers an event to one subscriber", () => {
 		const handler = mock(() => {});
 
 		bus.subscribe(handler);
-		await bus.publish(event);
+		bus.publish(event);
 
 		expect(handler).toHaveBeenCalledTimes(1);
 		expect(handler).toHaveBeenCalledWith(event);
 	});
 
-	test("delivers an event to multiple subscribers", async () => {
+	test("delivers an event to multiple subscribers", () => {
 		const firstHandler = mock(() => {});
 		const secondHandler = mock(() => {});
 
 		bus.subscribe(firstHandler);
 		bus.subscribe(secondHandler);
-		await bus.publish(event);
+		bus.publish(event);
 
 		expect(firstHandler).toHaveBeenCalledTimes(1);
 		expect(firstHandler).toHaveBeenCalledWith(event);
@@ -47,71 +47,88 @@ describe("InMemoryEventBus", () => {
 		expect(secondHandler).toHaveBeenCalledWith(event);
 	});
 
-	test("stops delivery after unsubscribe", async () => {
+	test("stops delivery after unsubscribe", () => {
 		const handler = mock(() => {});
 
 		const unsubscribe = bus.subscribe(handler);
 		unsubscribe();
-		await bus.publish(event);
+		bus.publish(event);
 
 		expect(handler).not.toHaveBeenCalled();
 	});
 
-	test("allows unsubscribe to be called more than once", async () => {
+	test("allows unsubscribe to be called more than once", () => {
 		const handler = mock(() => {});
 		const unsubscribe = bus.subscribe(handler);
 
 		unsubscribe();
 		unsubscribe();
-		await bus.publish(event);
+		bus.publish(event);
 
 		expect(handler).not.toHaveBeenCalled();
 	});
 
-	test("keeps duplicate handler subscriptions independent", async () => {
+	test("keeps duplicate handler subscriptions independent", () => {
 		const handler = mock(() => {});
 		const unsubscribeFirst = bus.subscribe(handler);
 		bus.subscribe(handler);
 
 		unsubscribeFirst();
-		await bus.publish(event);
+		bus.publish(event);
 
 		expect(handler).toHaveBeenCalledTimes(1);
 		expect(handler).toHaveBeenCalledWith(event);
 	});
 
-	test("continues delivery when one subscriber throws", async () => {
+	test("continues delivery when one subscriber throws", () => {
 		const workingHandler = mock(() => {});
 
 		bus.subscribe(() => {
 			throw new Error("subscriber failed");
 		});
 		bus.subscribe(workingHandler);
-		await bus.publish(event);
+		bus.publish(event);
 
 		expect(workingHandler).toHaveBeenCalledTimes(1);
 		expect(workingHandler).toHaveBeenCalledWith(event);
 	});
 
-	test("resolves when an asynchronous subscriber rejects", async () => {
+	test("does not wait for an asynchronous subscriber", () => {
+		let completed = false;
+		bus.subscribe(async () => {
+			await Promise.resolve();
+			completed = true;
+		});
+
+		bus.publish(event);
+
+		expect(completed).toBe(false);
+	});
+
+	test("observes an accidental asynchronous subscriber rejection", async () => {
+		const workingHandler = mock(() => {});
 		bus.subscribe(async () => {
 			throw new Error("asynchronous subscriber failed");
 		});
+		bus.subscribe(workingHandler);
 
-		await expect(bus.publish(event)).resolves.toBeUndefined();
+		bus.publish(event);
+		await Promise.resolve();
+
+		expect(workingHandler).toHaveBeenCalledWith(event);
 	});
 
-	test("does not notify a subscriber added during the current publication", async () => {
+	test("does not notify a subscriber added during the current publication", () => {
 		const lateHandler = mock(() => {});
 
 		bus.subscribe(() => {
 			bus.subscribe(lateHandler);
 		});
 
-		await bus.publish(event);
+		bus.publish(event);
 		expect(lateHandler).not.toHaveBeenCalled();
 
-		await bus.publish(event);
+		bus.publish(event);
 		expect(lateHandler).toHaveBeenCalledTimes(1);
 		expect(lateHandler).toHaveBeenCalledWith(event);
 	});

@@ -20,24 +20,28 @@ export class InMemoryRuntimeEventBus implements RuntimeEventBus {
 		};
 	}
 
-	async publish(event: RuntimeEvent): Promise<void> {
+	publish(event: RuntimeEvent): void {
 		const subscriptions = [...this.subscriptions];
-		const results = await Promise.allSettled(
-			subscriptions.map(async (subscription) => {
-				await subscription.handler(event);
-			}),
-		);
 
-		for (const result of results) {
-			if (result.status === "rejected") {
-				logger.warn("event.subscriber.failed", {
-					eventType: event.type,
-					error:
-						result.reason instanceof Error
-							? result.reason.message
-							: String(result.reason),
-				});
+		for (const subscription of subscriptions) {
+			try {
+				const result = subscription.handler(event) as unknown;
+
+				if (result instanceof Promise) {
+					void result.catch((error) => {
+						this.logSubscriberFailure(event, error);
+					});
+				}
+			} catch (error) {
+				this.logSubscriberFailure(event, error);
 			}
 		}
+	}
+
+	private logSubscriberFailure(event: RuntimeEvent, error: unknown): void {
+		logger.warn("event.subscriber.failed", {
+			eventType: event.type,
+			error: error instanceof Error ? error.message : String(error),
+		});
 	}
 }

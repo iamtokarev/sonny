@@ -4,16 +4,26 @@ import type { RuntimeEvent } from "./runtime-event";
 
 const logger = createLogger("events.publisher");
 
-export async function publishRuntimeEvent(
+export function publishRuntimeEvent(
 	publisher: RuntimeEventPublisher,
 	event: RuntimeEvent,
-): Promise<void> {
+): void {
 	try {
-		await publisher.publish(event);
+		const result = publisher.publish(event) as unknown;
+
+		if (result instanceof Promise) {
+			void result.catch((error) => {
+				logPublishFailure(event, error);
+			});
+		}
 	} catch (error) {
-		logger.warn("event.publish.failed", {
-			eventType: event.type,
-			error: error instanceof Error ? error.message : String(error),
-		});
+		logPublishFailure(event, error);
 	}
+}
+
+function logPublishFailure(event: RuntimeEvent, error: unknown): void {
+	logger.warn("event.publish.failed", {
+		eventType: event.type,
+		error: error instanceof Error ? error.message : String(error),
+	});
 }

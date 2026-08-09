@@ -2,13 +2,13 @@ import { Box, render, Text, useApp, useInput } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SlashCommandResult } from "../commands/command";
 import { createDefaultCommandRegistry } from "../commands/create-command-registry";
-import type { ChatMessage, ToolCall } from "../domain";
+import type { ChatMessage, ToolCall, ToolCompletionStatus } from "../domain";
+import type { RuntimeEventBus } from "../events";
 import type { CreateAgentSessionResult } from "../runtime";
 import type {
 	ToolApprovalDecision,
 	ToolApprovalRequest,
 	ToolApprover,
-	ToolEventHandler,
 } from "../tools/tool-executor";
 import { createLogger } from "../utils/logger";
 import {
@@ -26,9 +26,9 @@ type UiMessage = {
 };
 
 type ChatAppProps = {
+	eventBus: RuntimeEventBus;
 	createSession: (
 		approveToolCall: ToolApprover,
-		onToolEvent: ToolEventHandler,
 	) => Promise<CreateAgentSessionResult>;
 };
 
@@ -62,24 +62,35 @@ export function formatSessionStartupMessage(
 	return `↻ Resumed ${title} (${session.restoredMessageCount} messages)`;
 }
 
-function looksLikeToolError(content: string): boolean {
-	return (
-		content.startsWith("BLOCKED:") ||
+function inferLegacyToolStatus(content: string): ToolCompletionStatus {
+	if (content.startsWith("BLOCKED:")) {
+		return "denied";
+	}
+
+	if (
 		content.startsWith("ERROR:") ||
 		content.startsWith("Tool execution failed:")
-	);
+	) {
+		return "failed";
+	}
+
+	return "succeeded";
 }
 
 function formatRestoredToolMessage(
 	toolCall: ToolCall | undefined,
 	content: string,
+	status: ToolCompletionStatus | undefined,
 ): string {
 	if (toolCall === undefined) {
 		return "tool";
 	}
 
-	const ok = !looksLikeToolError(content);
-	const resultPreview = formatToolResultPreview(toolCall.name, content, ok);
+	const resultPreview = formatToolResultPreview(
+		toolCall.name,
+		content,
+		status ?? inferLegacyToolStatus(content),
+	);
 
 	return [
 		toolCall.name,
@@ -130,6 +141,7 @@ export function createRestoredUiMessages(
 			content: formatRestoredToolMessage(
 				toolCallsById.get(message.toolCallId),
 				message.content,
+				message.status,
 			),
 		});
 	}
@@ -151,7 +163,7 @@ export function formatSessionExitSummary(
 	].join("\n");
 }
 
-function ChatApp({ createSession }: ChatAppProps) {
+export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 	const { exit } = useApp();
 	const commandRegistry = useMemo(() => createDefaultCommandRegistry(), []);
 	const [session, setSession] = useState<CreateAgentSessionResult | null>(null);
@@ -227,38 +239,7 @@ function ChatApp({ createSession }: ChatAppProps) {
 				setApproval({ request, resolve });
 			});
 
-		const onToolEvent: ToolEventHandler = (event) => {
-			if (cancelled) {
-				return;
-			}
-
-			if (event.type === "tool.started") {
-				logger.info("tool.ui.started", {
-					toolName: event.toolName,
-					toolCallId: event.toolCallId,
-					preview: event.preview,
-				});
-				setCurrentTool({
-					toolName: event.toolName,
-					preview: event.preview,
-				});
-				return;
-			}
-
-			logger.info("tool.ui.completed", {
-				toolName: event.toolName,
-				toolCallId: event.toolCallId,
-				ok: event.ok,
-				durationMs: event.durationMs,
-			});
-			setCurrentTool(null);
-			setMessages((items) => [
-				...items,
-				createMessage("tool", formatCompletedToolMessage(event)),
-			]);
-		};
-
-		void createSession(approveToolCall, onToolEvent)
+		void createSession(approveToolCall)
 			.then((createdSession) => {
 				if (!cancelled) {
 					logger.info("ui.session.created");
@@ -292,6 +273,45 @@ function ChatApp({ createSession }: ChatAppProps) {
 		};
 	}, [createSession, createMessage]);
 
+	useEffect(() => {
+		if (session === null) {
+			return;
+		}
+
+		return eventBus.subscribe((event) => {
+			if (event.sessionId !== session.historySession.id) {
+				return;
+			}
+
+			if (event.type === "tool.started") {
+				logger.info("tool.ui.started", {
+					toolName: event.toolName,
+					toolCallId: event.toolCallId,
+					preview: event.preview,
+				});
+				setCurrentTool({
+					toolName: event.toolName,
+					preview: event.preview,
+				});
+				return;
+			}
+
+			if (event.type === "tool.completed") {
+				logger.info("tool.ui.completed", {
+					toolName: event.toolName,
+					toolCallId: event.toolCallId,
+					status: event.status,
+					durationMs: event.durationMs,
+				});
+				setCurrentTool(null);
+				setMessages((items) => [
+					...items,
+					createMessage("tool", formatCompletedToolMessage(event)),
+				]);
+			}
+		});
+	}, [eventBus, session, createMessage]);
+
 	async function submit(rawInput: string): Promise<void> {
 		const text = rawInput.trim();
 
@@ -314,9 +334,9 @@ function ChatApp({ createSession }: ChatAppProps) {
 		const commandResult = await commandRegistry.dispatch(text, {
 			historySession: session.historySession,
 			skills: session.skills,
-			getMessageCount: () => session.session.getMessageCount(),
-			getContextUsage: () => session.session.getContextUsage(),
-			compactContext: () => session.session.compactContext(),
+			getMessageCount: () => session.runtime.getMessageCount(),
+			getContextUsage: () => session.runtime.getContextUsage(),
+			compactContext: () => session.runtime.compactContext(),
 		});
 
 		if (commandResult.handled) {
@@ -333,7 +353,13 @@ function ChatApp({ createSession }: ChatAppProps) {
 		});
 
 		try {
-			const response = await session.session.chat(text);
+			const result = await session.runtime.runTurn({
+				content: text,
+				source: { kind: "cli" },
+			});
+
+			const response = result.content;
+
 			logger.info("ui.submit.completed", {
 				responseLength: response.length,
 			});
@@ -531,9 +557,9 @@ function ChatApp({ createSession }: ChatAppProps) {
 
 export class ChatLoop {
 	constructor(
+		private readonly eventBus: RuntimeEventBus,
 		private readonly createSession: (
 			approveToolCall: ToolApprover,
-			onToolEvent: ToolEventHandler,
 		) => Promise<CreateAgentSessionResult>,
 	) {}
 
@@ -541,11 +567,9 @@ export class ChatLoop {
 		let createdSession: CreateAgentSessionResult | null = null;
 		const app = render(
 			<ChatApp
-				createSession={async (approveToolCall, onToolEvent) => {
-					const session = await this.createSession(
-						approveToolCall,
-						onToolEvent,
-					);
+				eventBus={this.eventBus}
+				createSession={async (approveToolCall) => {
+					const session = await this.createSession(approveToolCall);
 					createdSession = session;
 					return session;
 				}}
