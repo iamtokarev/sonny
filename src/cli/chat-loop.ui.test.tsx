@@ -1,6 +1,4 @@
 import { describe, expect, mock, test } from "bun:test";
-import { PassThrough } from "node:stream";
-import { type Instance, render } from "ink";
 import type { RuntimeEvent } from "../events";
 import { InMemoryRuntimeEventBus } from "../events";
 import type {
@@ -8,15 +6,16 @@ import type {
 	AgentTurnResult,
 	CreateAgentSessionResult,
 } from "../runtime";
+import {
+	createInkHarness,
+	enter,
+	flush,
+	type InkHarness,
+	type InkHarnessOptions,
+} from "../ui/test-support/ink-harness";
 import { ChatApp } from "./chat-loop";
 
 type RunTurn = (input: AgentTurnInput) => Promise<AgentTurnResult>;
-
-type InkHarness = {
-	app: Instance;
-	stdin: PassThrough;
-	output(): string;
-};
 
 class TrackingEventBus extends InMemoryRuntimeEventBus {
 	unsubscribeCount = 0;
@@ -110,67 +109,18 @@ function createToolEvent(
 	} as RuntimeEvent;
 }
 
-function createInkHarness(
+function createChatHarness(
 	eventBus: InMemoryRuntimeEventBus,
 	runTurn: RunTurn,
+	options: InkHarnessOptions = {},
 ): InkHarness {
-	const stdin = Object.assign(new PassThrough(), {
-		isTTY: true,
-		setRawMode(_enabled: boolean) {
-			return this;
-		},
-		ref() {
-			return this;
-		},
-		unref() {
-			return this;
-		},
-	});
-	const stdout = Object.assign(new PassThrough(), {
-		isTTY: true,
-		columns: 120,
-		rows: 40,
-	});
-	const stderr = new PassThrough();
-	let output = "";
-
-	stdout.on("data", (chunk) => {
-		output += chunk.toString();
-	});
-
-	const app = render(
+	return createInkHarness(
 		<ChatApp
 			eventBus={eventBus}
 			createSession={async () => createSessionResult(runTurn)}
 		/>,
-		{
-			stdin: stdin as unknown as NodeJS.ReadStream,
-			stdout: stdout as unknown as NodeJS.WriteStream,
-			stderr: stderr as unknown as NodeJS.WriteStream,
-			debug: true,
-			interactive: true,
-			exitOnCtrlC: false,
-			patchConsole: false,
-			maxFps: 1000,
-		},
+		options,
 	);
-
-	return {
-		app,
-		stdin,
-		output: () => output,
-	};
-}
-
-async function flush(harness: InkHarness): Promise<void> {
-	await harness.app.waitUntilRenderFlush();
-}
-
-async function enter(harness: InkHarness, input: string): Promise<void> {
-	harness.stdin.write(input);
-	await flush(harness);
-	harness.stdin.write("\r");
-	await flush(harness);
 }
 
 describe("ChatApp runtime integration", () => {
@@ -183,7 +133,7 @@ describe("ChatApp runtime integration", () => {
 					resolveTurn = resolve;
 				}),
 		);
-		const harness = createInkHarness(eventBus, runTurn);
+		const harness = createChatHarness(eventBus, runTurn);
 
 		try {
 			await flush(harness);
@@ -218,7 +168,7 @@ describe("ChatApp runtime integration", () => {
 
 	test("unsubscribes from runtime events when unmounted", async () => {
 		const eventBus = new TrackingEventBus();
-		const harness = createInkHarness(eventBus, async () => ({
+		const harness = createChatHarness(eventBus, async () => ({
 			turnId: "turn-1",
 			content: "Done",
 		}));
@@ -237,7 +187,7 @@ describe("ChatApp runtime integration", () => {
 
 			return { turnId: "turn-1", content: "Runtime response" };
 		});
-		const harness = createInkHarness(new InMemoryRuntimeEventBus(), runTurn);
+		const harness = createChatHarness(new InMemoryRuntimeEventBus(), runTurn);
 
 		try {
 			await flush(harness);
@@ -263,7 +213,7 @@ describe("ChatApp runtime integration", () => {
 			turnId: "turn-1",
 			content: "Unexpected response",
 		}));
-		const harness = createInkHarness(new InMemoryRuntimeEventBus(), runTurn);
+		const harness = createChatHarness(new InMemoryRuntimeEventBus(), runTurn);
 
 		try {
 			await flush(harness);
@@ -277,11 +227,33 @@ describe("ChatApp runtime integration", () => {
 		}
 	});
 
+	test("renders off a TTY instead of crashing on raw mode", async () => {
+		const runTurn = mock(async () => ({
+			turnId: "turn-1",
+			content: "Unexpected response",
+		}));
+		// Piped stdin cannot be put into raw mode. Ink throws rather than
+		// degrading, so the app has to decline to listen for keys at all.
+		const harness = createChatHarness(new InMemoryRuntimeEventBus(), runTurn, {
+			isTTY: false,
+		});
+
+		try {
+			await flush(harness);
+
+			expect(harness.output()).toContain("Sonny");
+			expect(harness.output()).toContain("Ask Sonny");
+		} finally {
+			harness.app.unmount();
+			await harness.app.waitUntilExit();
+		}
+	});
+
 	test("renders runtime failures", async () => {
 		const runTurn = mock(async () => {
 			throw new Error("Runtime failed");
 		});
-		const harness = createInkHarness(new InMemoryRuntimeEventBus(), runTurn);
+		const harness = createChatHarness(new InMemoryRuntimeEventBus(), runTurn);
 
 		try {
 			await flush(harness);
