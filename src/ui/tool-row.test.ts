@@ -100,13 +100,13 @@ describe("createToolRow", () => {
 	test("tells your denial apart from a policy block", () => {
 		const denied = createToolRow(
 			completed({
-				status: "failed",
+				status: "denied",
 				content: `BLOCKED: not allowed. Reason: ${userDenialReason}`,
 			}),
 		);
 		const blocked = createToolRow(
 			completed({
-				status: "failed",
+				status: "denied",
 				toolName: "readFile",
 				parameters: { path: ".env" },
 				content:
@@ -120,6 +120,21 @@ describe("createToolRow", () => {
 		expect(blocked.detail).toBe(
 			"policy: Access denied: refusing to read environment files",
 		);
+	});
+
+	test("names a tool this session does not have", () => {
+		const row = createToolRow(
+			completed({
+				status: "not_found",
+				toolName: "webSearch",
+				parameters: { query: "ink colours" },
+				content: "Tool not found: webSearch",
+			}),
+		);
+
+		expect(row.status).toBe("missing");
+		expect(row.result).toBe("no such tool");
+		expect(row.detail).toBe("this session has no tool called webSearch");
 	});
 
 	test("flags truncated output as a warning, not a failure", () => {

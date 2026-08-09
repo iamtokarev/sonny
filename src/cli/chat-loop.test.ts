@@ -112,6 +112,7 @@ describe("restoreTranscript", () => {
 					role: "tool",
 					toolCallId: "tool-call-1",
 					content: JSON.stringify({ stdout: "pass", stderr: "", exitCode: 0 }),
+					status: "succeeded",
 				},
 			]),
 		).toEqual([
@@ -122,14 +123,37 @@ describe("restoreTranscript", () => {
 					preview: "bun test",
 					duration: null,
 					status: "ok",
-					result: null,
+					result: "pass",
 					detail: null,
 				},
 			},
 		]);
 	});
 
-	test("marks a restored blocked call as failed", () => {
+	test("trusts the persisted status over the message text", () => {
+		const items = restoreTranscript([
+			{
+				role: "assistant",
+				content: "",
+				toolCalls: [
+					{ id: "tool-call-1", name: "readFile", parameters: { path: ".env" } },
+				],
+			},
+			{
+				role: "tool",
+				toolCallId: "tool-call-1",
+				content: "Permission was declined.",
+				status: "denied",
+			},
+		]);
+
+		expect(items[0]).toMatchObject({
+			kind: "tool",
+			row: { toolName: "readFile", status: "blocked", result: "blocked" },
+		});
+	});
+
+	test("falls back to reading the text for sessions recorded without a status", () => {
 		const items = restoreTranscript([
 			{
 				role: "assistant",
@@ -141,19 +165,10 @@ describe("restoreTranscript", () => {
 			{ role: "tool", toolCallId: "tool-call-1", content: "BLOCKED: secret" },
 		]);
 
-		expect(items).toEqual([
-			{
-				kind: "tool",
-				row: {
-					toolName: "readFile",
-					preview: ".env",
-					duration: null,
-					status: "error",
-					result: null,
-					detail: null,
-				},
-			},
-		]);
+		expect(items[0]).toMatchObject({
+			kind: "tool",
+			row: { toolName: "readFile", preview: ".env", status: "blocked" },
+		});
 	});
 });
 

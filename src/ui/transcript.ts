@@ -1,6 +1,10 @@
-import type { ChatMessage, ToolCall } from "../domain";
+import type { ChatMessage, ToolCall, ToolCompletionStatus } from "../domain";
 import type { MeterModel } from "./context-meter";
-import { describeToolCall, type ToolRow } from "./tool-row";
+import {
+	describeToolCall,
+	summariseToolResult,
+	type ToolRow,
+} from "./tool-row";
 
 export type NoticeTone = "info" | "warn" | "error";
 
@@ -70,6 +74,7 @@ export function restoreTranscript(messages: ChatMessage[]): TranscriptDraft[] {
 			row: restoreToolRow(
 				toolCallsById.get(message.toolCallId),
 				message.content,
+				message.status,
 			),
 		});
 	}
@@ -77,24 +82,45 @@ export function restoreTranscript(messages: ChatMessage[]): TranscriptDraft[] {
 	return items;
 }
 
+/**
+ * Sessions recorded before tool results carried a status have to be read from
+ * the message text, which is exactly the guessing the status field replaced.
+ */
+export function inferLegacyToolStatus(content: string): ToolCompletionStatus {
+	if (content.startsWith("BLOCKED:")) {
+		return "denied";
+	}
+
+	if (
+		content.startsWith("ERROR:") ||
+		content.startsWith("Tool execution failed:")
+	) {
+		return "failed";
+	}
+
+	return "succeeded";
+}
+
 function restoreToolRow(
 	toolCall: ToolCall | undefined,
 	content: string,
+	status: ToolCompletionStatus | undefined,
 ): ToolRow {
-	const failed =
-		content.startsWith("BLOCKED:") ||
-		content.startsWith("ERROR:") ||
-		content.startsWith("Tool execution failed:");
+	const toolName = toolCall?.name ?? "tool";
+	const summary = summariseToolResult(
+		toolName,
+		status ?? inferLegacyToolStatus(content),
+		content,
+	);
 
 	return {
-		toolName: toolCall?.name ?? "tool",
+		toolName,
 		preview:
 			toolCall === undefined
 				? ""
 				: describeToolCall(toolCall.name, toolCall.parameters),
+		// History records no durations, so we show none rather than invent one.
 		duration: null,
-		status: failed ? "error" : "ok",
-		result: null,
-		detail: null,
+		...summary,
 	};
 }

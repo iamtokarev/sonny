@@ -13,6 +13,7 @@ function resultColor(status: ToolRowStatus, theme: Theme): string | undefined {
 		case "error":
 		case "denied":
 		case "blocked":
+		case "missing":
 			return theme.err;
 		case "running":
 			return theme.faint;

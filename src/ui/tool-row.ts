@@ -1,4 +1,5 @@
 import { formatDuration } from "../cli/tool-display";
+import type { ToolCompletionStatus } from "../domain";
 import type { ToolCompletedEvent, ToolStartedEvent } from "../events";
 
 /**
@@ -7,7 +8,8 @@ import type { ToolCompletedEvent, ToolStartedEvent } from "../events";
  *   glyph · name(10) · preview · duration · result
  *
  * Only failures earn a second line. `denied` is you; `blocked` is the file and
- * URL policies deciding before you were asked.
+ * URL policies deciding before you were asked; `missing` is the model asking
+ * for a tool this session does not have.
  */
 export type ToolRowStatus =
 	| "running"
@@ -15,6 +17,7 @@ export type ToolRowStatus =
 	| "error"
 	| "denied"
 	| "blocked"
+	| "missing"
 	| "truncated";
 
 export type ToolRow = {
@@ -235,23 +238,28 @@ function summariseSuccess(
 	};
 }
 
+/**
+ * The runtime says the call was refused; the message says by whom. Only you and
+ * the policies can refuse, so the reason text is what separates them.
+ */
+function summariseRefusal(
+	content: string,
+): Pick<ToolRow, "status" | "result" | "detail"> {
+	const isUserDecision =
+		content.includes(userDenialReason) || content.includes(turnCancelledReason);
+
+	return {
+		status: isUserDecision ? "denied" : "blocked",
+		result: isUserDecision ? "denied" : "blocked",
+		detail: isUserDecision
+			? "you declined this call"
+			: extractPolicyReason(content),
+	};
+}
+
 function summariseFailure(
 	content: string,
 ): Pick<ToolRow, "status" | "result" | "detail"> {
-	if (content.startsWith("BLOCKED:")) {
-		const isUserDecision =
-			content.includes(userDenialReason) ||
-			content.includes(turnCancelledReason);
-
-		return {
-			status: isUserDecision ? "denied" : "blocked",
-			result: isUserDecision ? "denied" : "blocked",
-			detail: isUserDecision
-				? "you declined this call"
-				: extractPolicyReason(content),
-		};
-	}
-
 	return {
 		status: "error",
 		result: "failed",
@@ -274,17 +282,34 @@ function extractPolicyReason(content: string): string | null {
 		: `policy: ${truncate(reason, maxDetailWidth)}`;
 }
 
-export function createToolRow(event: ToolCompletedEvent): ToolRow {
-	const summary =
-		event.status === "succeeded"
-			? summariseSuccess(event.toolName, event.content)
-			: summariseFailure(event.content);
+/** The runtime classifies the outcome; the row only has to render it. */
+export function summariseToolResult(
+	toolName: string,
+	status: ToolCompletionStatus,
+	content: string,
+): Pick<ToolRow, "status" | "result" | "detail"> {
+	switch (status) {
+		case "succeeded":
+			return summariseSuccess(toolName, content);
+		case "denied":
+			return summariseRefusal(content);
+		case "not_found":
+			return {
+				status: "missing",
+				result: "no such tool",
+				detail: `this session has no tool called ${toolName}`,
+			};
+		case "failed":
+			return summariseFailure(content);
+	}
+}
 
+export function createToolRow(event: ToolCompletedEvent): ToolRow {
 	return {
 		toolName: event.toolName,
 		preview: describeToolCall(event.toolName, event.parameters),
 		duration: formatDuration(event.durationMs),
-		...summary,
+		...summariseToolResult(event.toolName, event.status, event.content),
 	};
 }
 
