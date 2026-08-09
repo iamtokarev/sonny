@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ToolEvent } from "../tools/tool-executor";
+import type { ToolCompletedEvent } from "../events";
 import {
 	createToolRow,
 	describeToolCall,
@@ -10,14 +10,19 @@ import {
 } from "./tool-row";
 
 function completed(
-	overrides: Partial<Extract<ToolEvent, { type: "tool.completed" }>> = {},
-): Extract<ToolEvent, { type: "tool.completed" }> {
+	overrides: Partial<ToolCompletedEvent> = {},
+): ToolCompletedEvent {
 	return {
 		type: "tool.completed",
+		eventId: "event-1",
+		sessionId: "session-1",
+		turnId: "turn-1",
+		source: { kind: "cli" },
+		occurredAt: "2026-01-01T00:00:00.000Z",
 		toolCallId: "call-1",
 		toolName: "bash",
 		parameters: { command: "bun run test" },
-		ok: true,
+		status: "succeeded",
 		content: JSON.stringify({ exitCode: 0, stdout: "42 pass", stderr: "" }),
 		durationMs: 4200,
 		...overrides,
@@ -68,7 +73,7 @@ describe("createToolRow", () => {
 	test("reports a non-zero exit with one line of why", () => {
 		const row = createToolRow(
 			completed({
-				ok: true,
+				status: "succeeded",
 				content: JSON.stringify({
 					exitCode: 1,
 					stdout: "",
@@ -95,13 +100,13 @@ describe("createToolRow", () => {
 	test("tells your denial apart from a policy block", () => {
 		const denied = createToolRow(
 			completed({
-				ok: false,
+				status: "failed",
 				content: `BLOCKED: not allowed. Reason: ${userDenialReason}`,
 			}),
 		);
 		const blocked = createToolRow(
 			completed({
-				ok: false,
+				status: "failed",
 				toolName: "readFile",
 				parameters: { path: ".env" },
 				content:
@@ -178,7 +183,7 @@ describe("createToolRow", () => {
 	test("surfaces a plain failure with its first line", () => {
 		const row = createToolRow(
 			completed({
-				ok: false,
+				status: "failed",
 				toolName: "editFile",
 				parameters: { path: "main.ts" },
 				content: "old string not found in file\n\nTool failed. Use this error…",

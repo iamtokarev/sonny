@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { TurnContext } from "../../events";
 import type { Tool } from "../tool";
 import { ToolExecutor } from "../tool-executor";
 import { ToolRegistry } from "../tool-registry";
@@ -7,6 +8,15 @@ import {
 	enrichFailureForModel,
 	reduceLargeToolOutput,
 } from "./default-tool-hooks";
+
+const turnContext: TurnContext = {
+	sessionId: "session-1",
+	turnId: "turn-1",
+	source: { kind: "cli" },
+	events: {
+		async publish() {},
+	},
+};
 
 describe("default tool hooks", () => {
 	test("file policy denies blocked file paths before permission", async () => {
@@ -35,13 +45,16 @@ describe("default tool hooks", () => {
 			}),
 		);
 
-		const result = await executor.execute({
-			id: "call_test",
-			name: "readFile",
-			parameters: {
-				path: ".env",
+		const result = await executor.execute(
+			{
+				id: "call_test",
+				name: "readFile",
+				parameters: {
+					path: ".env",
+				},
 			},
-		});
+			turnContext,
+		);
 
 		expect(executed).toBe(false);
 		expect(permissionCalled).toBe(false);
@@ -80,11 +93,14 @@ describe("default tool hooks", () => {
 			}),
 		);
 
-		const result = await executor.execute({
-			id: "call_test",
-			name: "webRead",
-			parameters: { url: "http://169.254.169.254/latest/meta-data" },
-		});
+		const result = await executor.execute(
+			{
+				id: "call_test",
+				name: "webRead",
+				parameters: { url: "http://169.254.169.254/latest/meta-data" },
+			},
+			turnContext,
+		);
 
 		expect(executed).toBe(false);
 		expect(permissionCalled).toBe(false);

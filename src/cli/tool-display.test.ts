@@ -31,7 +31,7 @@ describe("tool display formatting", () => {
 				stdout: "a".repeat(600),
 				stderr: "",
 			}),
-			true,
+			"succeeded",
 		);
 
 		expect(preview?.length).toBeLessThanOrEqual(503);
@@ -43,7 +43,7 @@ describe("tool display formatting", () => {
 			formatToolResultPreview(
 				"bash",
 				"BLOCKED: User denied this tool call.",
-				false,
+				"denied",
 			),
 		).toBe("[denied]");
 	});
@@ -57,7 +57,7 @@ describe("tool display formatting", () => {
 					stdout: "",
 					stderr: "",
 				}),
-				true,
+				"succeeded",
 			),
 		).toBe("[exit 1]");
 	});
@@ -66,12 +66,17 @@ describe("tool display formatting", () => {
 		expect(
 			formatCompletedToolMessage({
 				type: "tool.completed",
+				eventId: "event-1",
+				sessionId: "session-1",
+				turnId: "turn-1",
+				source: { kind: "cli" },
+				occurredAt: "2026-08-09T10:00:00.000Z",
 				toolCallId: "call_1",
 				toolName: "bash",
 				parameters: {
 					command: "bun test",
 				},
-				ok: true,
+				status: "succeeded",
 				content: JSON.stringify({
 					exitCode: 0,
 					stdout: "ok",

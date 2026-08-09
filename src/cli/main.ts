@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { Command } from "commander";
 import { config } from "../config";
+import { InMemoryRuntimeEventBus } from "../events";
 import { createAgentSession } from "../runtime";
 import { configureLogger, createLogger } from "../utils/logger";
 import { ChatLoop } from "./chat-loop";
@@ -41,12 +42,14 @@ program
 
 		logger.info("chat.command.started", sessionSelection);
 
+		const eventBus = new InMemoryRuntimeEventBus();
 		const chatLoop = new ChatLoop(
-			(approveToolCall, onToolEvent, onContextCompacted) =>
+			eventBus,
+			(approveToolCall, onContextCompacted) =>
 				createAgentSession({
 					config,
 					approveToolCall,
-					onToolEvent,
+					events: eventBus,
 					onContextCompacted,
 					skillsDirectory: join(config.workspace, "skills"),
 					...sessionSelection,

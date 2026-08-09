@@ -14,12 +14,12 @@ import type {
 } from "../commands/command";
 import { createDefaultCommandRegistry } from "../commands/create-command-registry";
 import type { ContextCompactionEvent } from "../context";
+import type { RuntimeEventBus } from "../events";
 import type { CreateAgentSessionResult } from "../runtime";
 import type {
 	ToolApprovalDecision,
 	ToolApprovalRequest,
 	ToolApprover,
-	ToolEventHandler,
 } from "../tools/tool-executor";
 import { type ApprovalModel, describeApproval } from "../ui/approval";
 import {
@@ -61,9 +61,9 @@ const logger = createLogger("cli.chat-loop");
 const quitArmedTimeoutMs = 3000;
 
 type ChatAppProps = {
+	eventBus: RuntimeEventBus;
 	createSession: (
 		approveToolCall: ToolApprover,
-		onToolEvent: ToolEventHandler,
 		onContextCompacted: (event: ContextCompactionEvent) => void,
 	) => Promise<CreateAgentSessionResult>;
 };
@@ -179,7 +179,7 @@ export function describeCompaction(
 	};
 }
 
-function ChatApp({ createSession }: ChatAppProps) {
+export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 	const { exit } = useApp();
 	// Piped stdin cannot be put into raw mode; without this guard Ink throws
 	// rather than degrading to a print-once run. Ink derives the flag from
@@ -287,30 +287,6 @@ function ChatApp({ createSession }: ChatAppProps) {
 				setApproval({ request, model: describeApproval(request), resolve });
 			});
 
-		const onToolEvent: ToolEventHandler = (event) => {
-			if (cancelled) {
-				return;
-			}
-
-			if (event.type === "tool.started") {
-				logger.info("tool.ui.started", {
-					toolName: event.toolName,
-					toolCallId: event.toolCallId,
-				});
-				setRunningTool(createRunningToolRow(event));
-				return;
-			}
-
-			logger.info("tool.ui.completed", {
-				toolName: event.toolName,
-				toolCallId: event.toolCallId,
-				ok: event.ok,
-				durationMs: event.durationMs,
-			});
-			setRunningTool(null);
-			append([{ kind: "tool", row: createToolRow(event) }]);
-		};
-
 		const onContextCompacted = (event: ContextCompactionEvent) => {
 			if (cancelled) {
 				return;
@@ -329,7 +305,7 @@ function ChatApp({ createSession }: ChatAppProps) {
 			}
 		};
 
-		void createSession(approveToolCall, onToolEvent, onContextCompacted)
+		void createSession(approveToolCall, onContextCompacted)
 			.then((createdSession) => {
 				if (cancelled) {
 					return;
@@ -364,6 +340,50 @@ function ChatApp({ createSession }: ChatAppProps) {
 		};
 	}, [createSession, append]);
 
+	// The runtime reports what it is doing rather than the UI inferring it, so
+	// the live region stays honest even for work this terminal did not start.
+	useEffect(() => {
+		if (session === null) {
+			return;
+		}
+
+		const sessionId = session.historySession.id;
+
+		return eventBus.subscribe((event) => {
+			if (event.sessionId !== sessionId) {
+				return;
+			}
+
+			switch (event.type) {
+				case "turn.started":
+					setTurnStartedAt(Date.parse(event.occurredAt));
+					return;
+				case "turn.completed":
+				case "turn.failed":
+					setTurnStartedAt(null);
+					setRunningTool(null);
+					return;
+				case "tool.started":
+					logger.info("tool.ui.started", {
+						toolName: event.toolName,
+						toolCallId: event.toolCallId,
+					});
+					setRunningTool(createRunningToolRow(event));
+					return;
+				case "tool.completed":
+					logger.info("tool.ui.completed", {
+						toolName: event.toolName,
+						toolCallId: event.toolCallId,
+						status: event.status,
+						durationMs: event.durationMs,
+					});
+					setRunningTool(null);
+					append([{ kind: "tool", row: createToolRow(event) }]);
+					return;
+			}
+		});
+	}, [append, eventBus, session]);
+
 	useEffect(() => {
 		if (!quitArmed) {
 			return;
@@ -391,7 +411,10 @@ function ChatApp({ createSession }: ChatAppProps) {
 			logger.info("ui.submit.started", { messageLength: text.length });
 
 			try {
-				const response = await session.session.chat(text);
+				const { content: response } = await session.runtime.runTurn({
+					content: text,
+					source: { kind: "cli" },
+				});
 
 				if (cancelledRef.current) {
 					logger.info("ui.submit.cancelled");
@@ -454,7 +477,7 @@ function ChatApp({ createSession }: ChatAppProps) {
 					append([
 						{
 							kind: "context",
-							meter: describeUsage(session.session.getContextUsage()),
+							meter: describeUsage(session.runtime.getContextUsage()),
 						},
 					]);
 					return;
@@ -501,9 +524,9 @@ function ChatApp({ createSession }: ChatAppProps) {
 				dispatched = await commandRegistry.dispatch(text, {
 					historySession: session.historySession,
 					skills: session.skills,
-					getMessageCount: () => session.session.getMessageCount(),
-					getContextUsage: () => session.session.getContextUsage(),
-					compactContext: () => session.session.compactContext(),
+					getMessageCount: () => session.runtime.getMessageCount(),
+					getContextUsage: () => session.runtime.getContextUsage(),
+					compactContext: () => session.runtime.compactContext(),
 				});
 			} finally {
 				// Commands never overlap a turn: the queue only drains once the
@@ -726,7 +749,7 @@ function ChatApp({ createSession }: ChatAppProps) {
 			? null
 			: (() => {
 					try {
-						return describeUsage(session.session.getContextUsage());
+						return describeUsage(session.runtime.getContextUsage());
 					} catch {
 						return null;
 					}
@@ -805,9 +828,9 @@ function ChatApp({ createSession }: ChatAppProps) {
 
 export class ChatLoop {
 	constructor(
+		private readonly eventBus: RuntimeEventBus,
 		private readonly createSession: (
 			approveToolCall: ToolApprover,
-			onToolEvent: ToolEventHandler,
 			onContextCompacted: (event: ContextCompactionEvent) => void,
 		) => Promise<CreateAgentSessionResult>,
 	) {}
@@ -816,14 +839,10 @@ export class ChatLoop {
 		let createdSession: CreateAgentSessionResult | null = null;
 		const app = render(
 			<ChatApp
-				createSession={async (
-					approveToolCall,
-					onToolEvent,
-					onContextCompacted,
-				) => {
+				eventBus={this.eventBus}
+				createSession={async (approveToolCall, onContextCompacted) => {
 					const session = await this.createSession(
 						approveToolCall,
-						onToolEvent,
 						onContextCompacted,
 					);
 					createdSession = session;

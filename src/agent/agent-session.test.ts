@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ChatMessage, ToolCall } from "../domain";
+import type { RuntimeEventPublisher, TurnContext } from "../events";
 import type { HistoryRecorderSink } from "../history";
 import { writeFileTool } from "../tools/builtin/write-file-tool";
 import type { Tool } from "../tools/tool";
@@ -72,19 +73,34 @@ const testTool: Tool = {
 	execute: async () => ({ ok: true, content: "tool output" }),
 };
 
+const events: RuntimeEventPublisher = {
+	async publish() {},
+};
+
+function createTurnContext(): TurnContext {
+	return {
+		sessionId: "session-1",
+		turnId: "turn-1",
+		source: { kind: "cli" },
+		events,
+	};
+}
+
 describe("AgentSession", () => {
 	let state: SessionState;
 	let llm: FakeLLM;
 	let session: AgentSession;
+	let turnContext: TurnContext;
 
 	beforeEach(() => {
 		state = new SessionState();
 		llm = new FakeLLM();
 		session = new AgentSession("You are Sonny.", state, llm);
+		turnContext = createTurnContext();
 	});
 
 	test("sends system prompt and user message to the LLM", async () => {
-		await session.chat("Hello");
+		await session.chat("Hello", turnContext);
 
 		expect(llm.calls).toEqual([
 			[
@@ -95,13 +111,13 @@ describe("AgentSession", () => {
 	});
 
 	test("returns the assistant response", async () => {
-		const response = await session.chat("Hello");
+		const response = await session.chat("Hello", turnContext);
 
 		expect(response).toBe("Hello back");
 	});
 
 	test("adds user and assistant messages to session state", async () => {
-		await session.chat("Hello");
+		await session.chat("Hello", turnContext);
 
 		expect(state.buildMessages("You are Sonny.")).toEqual([
 			{ role: "system", content: "You are Sonny." },
@@ -118,6 +134,8 @@ describe("AgentSession", () => {
 			preTool: [() => ({ action: "ask" })],
 			permission: async () => ({ approved: true }),
 		});
+		const execute = mock(toolExecutor.execute.bind(toolExecutor));
+		toolExecutor.execute = execute;
 		const llm = new FakeLLM([
 			{
 				content: "",
@@ -144,9 +162,13 @@ describe("AgentSession", () => {
 			toolExecutor,
 		);
 
-		const response = await session.chat("Use a tool");
+		const response = await session.chat("Use a tool", turnContext);
 
 		expect(response).toBe("Final answer");
+		expect(execute).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "call_test" }),
+			turnContext,
+		);
 		expect(llm.calls).toHaveLength(2);
 		expect(llm.toolSchemas[0]).toEqual(tools.getSchemas());
 		expect(llm.calls[1]).toEqual([
@@ -167,6 +189,7 @@ describe("AgentSession", () => {
 				role: "tool",
 				toolCallId: "call_test",
 				content: "tool output",
+				status: "succeeded",
 			},
 		]);
 	});
@@ -203,12 +226,13 @@ describe("AgentSession", () => {
 			toolExecutor,
 		);
 
-		await session.chat("Use a missing tool");
+		await session.chat("Use a missing tool", turnContext);
 
 		expect(llm.calls[1]?.at(-1)).toEqual({
 			role: "tool",
 			toolCallId: "call_missing",
 			content: "Tool not found: missing_tool",
+			status: "not_found",
 		});
 	});
 
@@ -252,13 +276,14 @@ describe("AgentSession", () => {
 			toolExecutor,
 		);
 
-		await session.chat("Write a file");
+		await session.chat("Write a file", turnContext);
 
 		const toolMessage = llm.calls[1]?.at(-1);
 
 		expect(toolMessage).toMatchObject({
 			role: "tool",
 			toolCallId: "call_write",
+			status: "denied",
 		});
 		expect(toolMessage?.content).toContain("BLOCKED");
 		expect(toolMessage?.content).toContain("Do NOT retry");
@@ -275,7 +300,7 @@ describe("AgentSession", () => {
 		]);
 		const session = new AgentSession("You are Sonny.", state, llm);
 
-		await session.chat("No tool needed");
+		await session.chat("No tool needed", turnContext);
 
 		expect(state.buildMessages("You are Sonny.")).toEqual([
 			{ role: "system", content: "You are Sonny." },
@@ -295,7 +320,7 @@ describe("AgentSession", () => {
 			historyRecorder,
 		);
 
-		await session.chat("Hello");
+		await session.chat("Hello", turnContext);
 
 		expect(historyRecorder.flushes).toEqual([
 			[
@@ -316,7 +341,9 @@ describe("AgentSession", () => {
 			historyRecorder,
 		);
 
-		await expect(session.chat("Hello")).rejects.toThrow("LLM failed");
+		await expect(session.chat("Hello", turnContext)).rejects.toThrow(
+			"LLM failed",
+		);
 
 		expect(historyRecorder.flushes).toEqual([
 			[{ role: "user", content: "Hello" }],
@@ -336,7 +363,7 @@ describe("AgentSession", () => {
 			historyRecorder,
 		);
 
-		const response = await session.chat("Hello");
+		const response = await session.chat("Hello", turnContext);
 
 		expect(response).toBe("Hello back");
 	});
@@ -354,7 +381,9 @@ describe("AgentSession", () => {
 			historyRecorder,
 		);
 
-		await expect(session.chat("Hello")).rejects.toThrow("LLM failed");
+		await expect(session.chat("Hello", turnContext)).rejects.toThrow(
+			"LLM failed",
+		);
 	});
 
 	test("prepares context before LLM call and persists changed messages", async () => {
@@ -403,7 +432,7 @@ describe("AgentSession", () => {
 			contextManager,
 		);
 
-		await session.chat("Next question");
+		await session.chat("Next question", turnContext);
 
 		expect(historyRecorder.replacements).toEqual([compactedMessages]);
 		expect(llm.calls[0]).toEqual([
@@ -440,7 +469,7 @@ describe("AgentSession", () => {
 			contextManager,
 		);
 
-		const response = await session.chat("Hello");
+		const response = await session.chat("Hello", turnContext);
 
 		expect(response).toBe("Hello back");
 		expect(historyRecorder.replacements).toEqual([]);
@@ -479,7 +508,7 @@ describe("AgentSession", () => {
 			contextManager,
 		);
 
-		await session.chat("Hello");
+		await session.chat("Hello", turnContext);
 
 		expect(historyRecorder.replacements).toEqual([]);
 		expect(llm.calls[0]).toEqual([

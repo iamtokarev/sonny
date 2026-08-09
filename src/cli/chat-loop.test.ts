@@ -28,7 +28,7 @@ function createSessionResult(
 	overrides: Partial<CreateAgentSessionResult> = {},
 ): CreateAgentSessionResult {
 	return {
-		session: {} as CreateAgentSessionResult["session"],
+		runtime: {} as CreateAgentSessionResult["runtime"],
 		historySession: createHistorySession(),
 		restoredMessageCount: 2,
 		restoredMessages: [],

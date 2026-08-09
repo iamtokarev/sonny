@@ -1,5 +1,11 @@
 export type ChatRole = "system" | "user" | "assistant" | "tool";
 
+export type ToolCompletionStatus =
+	| "succeeded"
+	| "denied"
+	| "failed"
+	| "not_found";
+
 export type ToolCall = {
 	id: string;
 	name: string;
@@ -26,6 +32,7 @@ export type ToolMessage = {
 	role: "tool";
 	content: string;
 	toolCallId: string;
+	status?: ToolCompletionStatus;
 };
 
 export type ChatMessage =

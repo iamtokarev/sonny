@@ -1,5 +1,5 @@
 import { formatDuration } from "../cli/tool-display";
-import type { ToolEvent } from "../tools/tool-executor";
+import type { ToolCompletedEvent, ToolStartedEvent } from "../events";
 
 /**
  * Every tool renders as one line:
@@ -274,12 +274,11 @@ function extractPolicyReason(content: string): string | null {
 		: `policy: ${truncate(reason, maxDetailWidth)}`;
 }
 
-export function createToolRow(
-	event: Extract<ToolEvent, { type: "tool.completed" }>,
-): ToolRow {
-	const summary = event.ok
-		? summariseSuccess(event.toolName, event.content)
-		: summariseFailure(event.content);
+export function createToolRow(event: ToolCompletedEvent): ToolRow {
+	const summary =
+		event.status === "succeeded"
+			? summariseSuccess(event.toolName, event.content)
+			: summariseFailure(event.content);
 
 	return {
 		toolName: event.toolName,
@@ -289,9 +288,7 @@ export function createToolRow(
 	};
 }
 
-export function createRunningToolRow(
-	event: Extract<ToolEvent, { type: "tool.started" }>,
-): ToolRow {
+export function createRunningToolRow(event: ToolStartedEvent): ToolRow {
 	return {
 		toolName: event.toolName,
 		preview: describeToolCall(event.toolName, event.parameters),
