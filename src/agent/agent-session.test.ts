@@ -604,19 +604,20 @@ describe("AgentSession", () => {
 			contextManager,
 		);
 
-		const result = await session.compactContext();
+		const result = await session.compactContext(createTurnContext());
 
 		expect(result.summaryCompactedMessageCount).toBe(3);
 		expect(state.getMessages()).toEqual(compactedMessages);
 		expect(historyRecorder.replacements).toEqual([compactedMessages]);
-		expect(prepareCalls).toEqual([
+		expect(prepareCalls).toMatchObject([
 			{
 				request: {
 					systemPrompt: "You are Sonny.",
 					messages: [{ role: "user", content: "Hello" }],
 					tools: [],
 				},
-				options: { forceSummary: true },
+				// The turn context rides along so compaction can report itself.
+				options: { forceSummary: true, turnContext: { turnId: "turn-1" } },
 			},
 		]);
 	});
@@ -655,7 +656,7 @@ describe("AgentSession", () => {
 			contextManager,
 		);
 
-		const result = await session.compactContext();
+		const result = await session.compactContext(createTurnContext());
 
 		expect(result.tokenCountAfter).toBe(20);
 		expect(state.getMessages()).toEqual(compactedMessages);

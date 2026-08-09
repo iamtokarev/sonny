@@ -54,14 +54,14 @@ export class AgentSession {
 		return this.contextManager.inspect(this.buildContextRequest());
 	}
 
-	async compactContext(): Promise<PreparedContext> {
+	async compactContext(turnContext: TurnContext): Promise<PreparedContext> {
 		if (this.contextManager === undefined) {
 			throw new Error("Context manager is not configured.");
 		}
 
 		const preparedContext = await this.contextManager.prepare(
 			this.buildContextRequest(),
-			{ forceSummary: true },
+			{ forceSummary: true, turnContext },
 		);
 
 		this.applyPreparedContext(preparedContext);
@@ -80,7 +80,7 @@ export class AgentSession {
 
 			for (let iteration = 0; iteration < maxToolIterations; iteration++) {
 				const toolSchemas = this.tools?.getSchemas() ?? [];
-				await this.prepareContext(toolSchemas);
+				await this.prepareContext(toolSchemas, turnContext);
 				const messages = this.state.buildMessages(this.systemPrompt);
 
 				logger.info("llm.turn.started", {
@@ -178,17 +178,23 @@ export class AgentSession {
 		}
 	}
 
-	private async prepareContext(toolSchemas: unknown[]): Promise<void> {
+	private async prepareContext(
+		toolSchemas: unknown[],
+		turnContext: TurnContext,
+	): Promise<void> {
 		// Automatic compaction is a best-effort optimization. A transient
 		// summarizer failure must not abort the user's turn, so degrade to the
 		// current (uncompacted) context instead of propagating the error. The
 		// manual /compact path reports failures separately.
 		try {
-			const preparedContext = await this.contextManager?.prepare({
-				systemPrompt: this.systemPrompt,
-				messages: this.state.getMessages(),
-				tools: toolSchemas,
-			});
+			const preparedContext = await this.contextManager?.prepare(
+				{
+					systemPrompt: this.systemPrompt,
+					messages: this.state.getMessages(),
+					tools: toolSchemas,
+				},
+				{ turnContext },
+			);
 
 			if (preparedContext === undefined) {
 				return;

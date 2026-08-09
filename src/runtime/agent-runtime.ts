@@ -15,7 +15,7 @@ export interface AgentTurnSession {
 export interface AgentRuntimeSession extends AgentTurnSession {
 	getMessageCount(): number;
 	getContextUsage(): ContextUsage;
-	compactContext(): Promise<PreparedContext>;
+	compactContext(turnContext: TurnContext): Promise<PreparedContext>;
 }
 
 export interface AgentTurnInput {
@@ -51,8 +51,17 @@ export class AgentRuntime {
 		return this.options.session.getContextUsage();
 	}
 
+	/**
+	 * `/compact` is not a model turn, but it is slow and it rewrites what the
+	 * agent remembers — so it reports through the same channel, under a source
+	 * that says who asked for it.
+	 */
 	compactContext(): Promise<PreparedContext> {
-		return this.enqueue(() => this.options.session.compactContext());
+		return this.enqueue(() =>
+			this.options.session.compactContext(
+				this.createTurnContext({ kind: "system", name: "compact" }),
+			),
+		);
 	}
 
 	private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -66,13 +75,17 @@ export class AgentRuntime {
 		return run;
 	}
 
-	private async executeTurn(input: AgentTurnInput): Promise<AgentTurnResult> {
-		const turnContext: TurnContext = {
+	private createTurnContext(source: RuntimeSource): TurnContext {
+		return {
 			sessionId: this.options.sessionId,
 			turnId: randomUUIDv7(),
-			source: input.source,
+			source,
 			events: this.options.events,
 		};
+	}
+
+	private async executeTurn(input: AgentTurnInput): Promise<AgentTurnResult> {
+		const turnContext = this.createTurnContext(input.source);
 
 		publishRuntimeEvent(this.options.events, {
 			...createEventMetadata(turnContext),

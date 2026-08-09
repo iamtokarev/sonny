@@ -48,12 +48,37 @@ export interface ToolCompletedEvent extends RuntimeEventBase {
 	readonly durationMs: number;
 }
 
+/**
+ * Compaction takes seconds — summarising calls the model — and it changes what
+ * the agent remembers. Both facts are worth reporting, so it announces itself
+ * before the expensive part rather than only describing the outcome.
+ */
+export interface ContextCompactionStartedEvent extends RuntimeEventBase {
+	readonly type: "context.compaction.started";
+	readonly tokenCount: number;
+	readonly thresholdTokens: number;
+	/** True for `/compact`, false when the threshold triggered it. */
+	readonly forced: boolean;
+}
+
+export interface ContextCompactionCompletedEvent extends RuntimeEventBase {
+	readonly type: "context.compaction.completed";
+	readonly tokenCountBefore: number;
+	readonly tokenCountAfter: number;
+	readonly compactedToolResultCount: number;
+	readonly summaryCompactedMessageCount: number;
+	readonly changed: boolean;
+	readonly durationMs: number;
+}
+
 export type RuntimeEvent =
 	| TurnStartedEvent
 	| TurnCompletedEvent
 	| TurnFailedEvent
 	| ToolStartedEvent
-	| ToolCompletedEvent;
+	| ToolCompletedEvent
+	| ContextCompactionStartedEvent
+	| ContextCompactionCompletedEvent;
 
 export function createEventMetadata(
 	context: TurnContext,

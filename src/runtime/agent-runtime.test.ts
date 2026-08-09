@@ -279,4 +279,37 @@ describe("AgentRuntime", () => {
 		await expect(compaction).resolves.toBe(compactedContext);
 		expect(activity).toEqual(["turn", "compact"]);
 	});
+
+	test("gives manual compaction its own correlated, system-sourced context", async () => {
+		const eventBus = new InMemoryRuntimeEventBus();
+		let compactionContext: TurnContext | undefined;
+		const runtime = createRuntime(
+			{
+				chat: async () => "Response",
+				async compactContext(turnContext) {
+					compactionContext = turnContext;
+
+					return {
+						messages: [],
+						tokenCountBefore: 0,
+						tokenCountAfter: 0,
+						thresholdTokens: 150_000,
+						changed: false,
+						compactedToolResultCount: 0,
+						summaryCompactedMessageCount: 0,
+					};
+				},
+			},
+			eventBus,
+		);
+
+		await runtime.runTurn(createInput("Hello"));
+		await runtime.compactContext();
+
+		expect(compactionContext?.sessionId).toBe("session-1");
+		expect(compactionContext?.source).toEqual({
+			kind: "system",
+			name: "compact",
+		});
+	});
 });

@@ -1,4 +1,9 @@
 import type { ChatMessage, ToolMessage } from "../domain";
+import {
+	createEventMetadata,
+	publishRuntimeEvent,
+	type TurnContext,
+} from "../events";
 import type { ContextSummarizer } from "./context-summarizer";
 import type { TokenCounter, TokenCountRequest } from "./token-counter";
 
@@ -6,31 +11,6 @@ export const TOOL_OUTPUT_COMPACTION_MARKER = "[Tool output compacted:";
 export const MISSING_TOOL_RESULT_STUB =
 	"[Result from earlier conversation - see context summary above]";
 export const CONTEXT_SUMMARY_HEADER = "[CONTEXT COMPACTION - REFERENCE ONLY]";
-
-/**
- * Compaction can take seconds — summarising calls the model — and it changes
- * what the agent remembers. Both facts are worth showing, so the manager
- * reports when it starts as well as what it did.
- */
-export type ContextCompactionEvent =
-	| {
-			type: "context.compaction.started";
-			tokenCount: number;
-			thresholdTokens: number;
-			/** True for `/compact`, false when the threshold triggered it. */
-			forced: boolean;
-	  }
-	| {
-			type: "context.compaction.completed";
-			tokenCountBefore: number;
-			tokenCountAfter: number;
-			compactedToolResultCount: number;
-			summaryCompactedMessageCount: number;
-			changed: boolean;
-			durationMs: number;
-	  };
-
-export type ContextCompactionListener = (event: ContextCompactionEvent) => void;
 
 export type ContextManagerOptions = {
 	tokenCounter: TokenCounter;
@@ -41,7 +21,6 @@ export type ContextManagerOptions = {
 	summaryMaxTokens: number;
 	protectedHeadMessages: number;
 	protectedTailMessages: number;
-	onCompaction?: ContextCompactionListener;
 };
 
 export type PreparedContext = {
@@ -63,6 +42,12 @@ export type ContextUsage = {
 
 export type PrepareContextOptions = {
 	forceSummary?: boolean;
+	/**
+	 * Present when the caller wants compaction reported. `/compact` runs outside
+	 * any model turn, so its caller mints a system-sourced context rather than
+	 * compaction inventing correlation of its own.
+	 */
+	turnContext?: TurnContext;
 };
 
 export interface MessagesSummarySplit {
@@ -237,14 +222,19 @@ export class ContextManager {
 			};
 		}
 
+		const turnContext = options.turnContext;
+
 		// Past this point compaction is happening, so announce it before the
 		// expensive part rather than only reporting the outcome.
-		this.options.onCompaction?.({
-			type: "context.compaction.started",
-			tokenCount: tokenCountBefore,
-			thresholdTokens,
-			forced,
-		});
+		if (turnContext !== undefined) {
+			publishRuntimeEvent(turnContext.events, {
+				...createEventMetadata(turnContext),
+				type: "context.compaction.started",
+				tokenCount: tokenCountBefore,
+				thresholdTokens,
+				forced,
+			});
+		}
 
 		const startedAt = Date.now();
 
@@ -256,27 +246,40 @@ export class ContextManager {
 				thresholdTokens,
 			);
 
-			this.reportCompacted(prepared, startedAt);
+			this.reportCompacted(turnContext, prepared, startedAt);
 
 			return prepared;
 		} catch (error) {
-			// A listener that only hears "started" would show progress forever.
-			this.options.onCompaction?.({
-				type: "context.compaction.completed",
-				tokenCountBefore,
-				tokenCountAfter: tokenCountBefore,
-				compactedToolResultCount: 0,
-				summaryCompactedMessageCount: 0,
-				changed: false,
-				durationMs: Date.now() - startedAt,
-			});
+			// A subscriber that only heard "started" would show progress forever.
+			this.reportCompacted(
+				turnContext,
+				{
+					messages: request.messages,
+					tokenCountBefore,
+					tokenCountAfter: tokenCountBefore,
+					thresholdTokens,
+					changed: false,
+					compactedToolResultCount: 0,
+					summaryCompactedMessageCount: 0,
+				},
+				startedAt,
+			);
 
 			throw error;
 		}
 	}
 
-	private reportCompacted(prepared: PreparedContext, startedAt: number): void {
-		this.options.onCompaction?.({
+	private reportCompacted(
+		turnContext: TurnContext | undefined,
+		prepared: PreparedContext,
+		startedAt: number,
+	): void {
+		if (turnContext === undefined) {
+			return;
+		}
+
+		publishRuntimeEvent(turnContext.events, {
+			...createEventMetadata(turnContext),
 			type: "context.compaction.completed",
 			tokenCountBefore: prepared.tokenCountBefore,
 			tokenCountAfter: prepared.tokenCountAfter,

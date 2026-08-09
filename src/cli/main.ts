@@ -43,17 +43,14 @@ program
 		logger.info("chat.command.started", sessionSelection);
 
 		const eventBus = new InMemoryRuntimeEventBus();
-		const chatLoop = new ChatLoop(
-			eventBus,
-			(approveToolCall, onContextCompacted) =>
-				createAgentSession({
-					config,
-					approveToolCall,
-					events: eventBus,
-					onContextCompacted,
-					skillsDirectory: join(config.workspace, "skills"),
-					...sessionSelection,
-				}),
+		const chatLoop = new ChatLoop(eventBus, (approveToolCall) =>
+			createAgentSession({
+				config,
+				approveToolCall,
+				events: eventBus,
+				skillsDirectory: join(config.workspace, "skills"),
+				...sessionSelection,
+			}),
 		);
 
 		await chatLoop.run();

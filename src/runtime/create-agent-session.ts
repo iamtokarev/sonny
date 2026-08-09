@@ -5,7 +5,6 @@ import { AgentSession, buildSystemPrompt, SessionState } from "../agent";
 import { loadAgentDefinition } from "../agents/agents-loader";
 import type { Config } from "../config";
 import {
-	type ContextCompactionListener,
 	ContextManager,
 	GptTokenizerTokenCounter,
 	LlmContextSummarizer,
@@ -43,7 +42,6 @@ export type CreateAgentSessionOptions = {
 	config: Config;
 	approveToolCall: PermissionHook;
 	events: RuntimeEventPublisher;
-	onContextCompacted?: ContextCompactionListener;
 	skillsDirectory?: string;
 	resumeSessionId?: string;
 	continueLatest?: boolean;
@@ -135,7 +133,6 @@ export async function createAgentSession(
 		tokenCounter: new GptTokenizerTokenCounter(),
 		summarizer: new LlmContextSummarizer(llm),
 		...options.config.contextCompaction,
-		onCompaction: options.onContextCompacted,
 	});
 
 	const agentSession = new AgentSession(

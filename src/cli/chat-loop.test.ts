@@ -157,10 +157,19 @@ describe("restoreTranscript", () => {
 	});
 });
 
+const eventMetadata = {
+	eventId: "event-1",
+	sessionId: "session-1",
+	turnId: "turn-1",
+	source: { kind: "cli" },
+	occurredAt: "2026-01-01T00:00:00.000Z",
+} as const;
+
 describe("describeCompactionStart", () => {
 	test("shows a running row so compaction is visible while it happens", () => {
 		expect(
 			describeCompactionStart({
+				...eventMetadata,
 				type: "context.compaction.started",
 				tokenCount: 150_000,
 				thresholdTokens: 150_000,
@@ -179,6 +188,7 @@ describe("describeCompactionStart", () => {
 	test("says what it is doing when you asked for it", () => {
 		expect(
 			describeCompactionStart({
+				...eventMetadata,
 				type: "context.compaction.started",
 				tokenCount: 60_000,
 				thresholdTokens: 150_000,
@@ -192,6 +202,7 @@ describe("describeCompaction", () => {
 	test("reports summarised messages and the tokens saved", () => {
 		expect(
 			describeCompaction({
+				...eventMetadata,
 				type: "context.compaction.completed",
 				tokenCountBefore: 118_900,
 				tokenCountAfter: 57_500,
@@ -213,6 +224,7 @@ describe("describeCompaction", () => {
 	test("reports trimmed tool results when no summary was needed", () => {
 		expect(
 			describeCompaction({
+				...eventMetadata,
 				type: "context.compaction.completed",
 				tokenCountBefore: 71_000,
 				tokenCountAfter: 62_800,

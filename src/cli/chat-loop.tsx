@@ -13,8 +13,11 @@ import type {
 	SlashCommandResult,
 } from "../commands/command";
 import { createDefaultCommandRegistry } from "../commands/create-command-registry";
-import type { ContextCompactionEvent } from "../context";
-import type { RuntimeEventBus } from "../events";
+import type {
+	ContextCompactionCompletedEvent,
+	ContextCompactionStartedEvent,
+	RuntimeEventBus,
+} from "../events";
 import type { CreateAgentSessionResult } from "../runtime";
 import type {
 	ToolApprovalDecision,
@@ -64,7 +67,6 @@ type ChatAppProps = {
 	eventBus: RuntimeEventBus;
 	createSession: (
 		approveToolCall: ToolApprover,
-		onContextCompacted: (event: ContextCompactionEvent) => void,
 	) => Promise<CreateAgentSessionResult>;
 };
 
@@ -139,10 +141,7 @@ export const compactToolName = "compact";
 
 /** The row shown while compaction is running, before its outcome is known. */
 export function describeCompactionStart(
-	event: Extract<
-		ContextCompactionEvent,
-		{ type: "context.compaction.started" }
-	>,
+	event: ContextCompactionStartedEvent,
 ): ToolRow {
 	return {
 		toolName: compactToolName,
@@ -158,10 +157,7 @@ export function describeCompactionStart(
 
 /** Formats what compaction did, keeping its branches distinct. */
 export function describeCompaction(
-	event: Extract<
-		ContextCompactionEvent,
-		{ type: "context.compaction.completed" }
-	>,
+	event: ContextCompactionCompletedEvent,
 ): ToolRow {
 	const saved = event.tokenCountBefore - event.tokenCountAfter;
 	const what =
@@ -287,25 +283,7 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 				setApproval({ request, model: describeApproval(request), resolve });
 			});
 
-		const onContextCompacted = (event: ContextCompactionEvent) => {
-			if (cancelled) {
-				return;
-			}
-
-			if (event.type === "context.compaction.started") {
-				setRunningTool(describeCompactionStart(event));
-				return;
-			}
-
-			setRunningTool(null);
-
-			if (event.changed) {
-				compactionReportedRef.current = true;
-				append([{ kind: "tool", row: describeCompaction(event) }]);
-			}
-		};
-
-		void createSession(approveToolCall, onContextCompacted)
+		void createSession(approveToolCall)
 			.then((createdSession) => {
 				if (cancelled) {
 					return;
@@ -379,6 +357,20 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					});
 					setRunningTool(null);
 					append([{ kind: "tool", row: createToolRow(event) }]);
+					return;
+				case "context.compaction.started":
+					setRunningTool(describeCompactionStart(event));
+					return;
+				case "context.compaction.completed":
+					setRunningTool(null);
+
+					// An unchanged context is not worth a row; `/compact` still says
+					// so in words.
+					if (event.changed) {
+						compactionReportedRef.current = true;
+						append([{ kind: "tool", row: describeCompaction(event) }]);
+					}
+
 					return;
 			}
 		});
@@ -831,7 +823,6 @@ export class ChatLoop {
 		private readonly eventBus: RuntimeEventBus,
 		private readonly createSession: (
 			approveToolCall: ToolApprover,
-			onContextCompacted: (event: ContextCompactionEvent) => void,
 		) => Promise<CreateAgentSessionResult>,
 	) {}
 
@@ -840,11 +831,8 @@ export class ChatLoop {
 		const app = render(
 			<ChatApp
 				eventBus={this.eventBus}
-				createSession={async (approveToolCall, onContextCompacted) => {
-					const session = await this.createSession(
-						approveToolCall,
-						onContextCompacted,
-					);
+				createSession={async (approveToolCall) => {
+					const session = await this.createSession(approveToolCall);
 					createdSession = session;
 					return session;
 				}}

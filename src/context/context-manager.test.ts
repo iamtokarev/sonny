@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { ChatMessage } from "../domain";
+import type { RuntimeEvent, TurnContext } from "../events";
 import {
 	CONTEXT_SUMMARY_HEADER,
-	type ContextCompactionEvent,
 	ContextManager,
 	MISSING_TOOL_RESULT_STUB,
 	sanitizeToolPairs,
@@ -528,11 +528,21 @@ describe("sanitizeToolPairs", () => {
 });
 
 describe("compaction reporting", () => {
+	function createTurnContext(events: RuntimeEvent[]): TurnContext {
+		return {
+			sessionId: "session-1",
+			turnId: "turn-1",
+			source: { kind: "cli" },
+			events: { publish: (event) => events.push(event) },
+		};
+	}
+
 	function collect(counts: number[]): {
 		manager: ContextManager;
-		events: ContextCompactionEvent[];
+		events: RuntimeEvent[];
+		turnContext: TurnContext;
 	} {
-		const events: ContextCompactionEvent[] = [];
+		const events: RuntimeEvent[] = [];
 		const manager = new ContextManager({
 			tokenCounter: new FakeTokenCounter(counts),
 			summarizer: new FakeSummarizer(),
@@ -542,10 +552,9 @@ describe("compaction reporting", () => {
 			summaryMaxTokens: 4000,
 			protectedHeadMessages: 1,
 			protectedTailMessages: 1,
-			onCompaction: (event) => events.push(event),
 		});
 
-		return { manager, events };
+		return { manager, events, turnContext: createTurnContext(events) };
 	}
 
 	const request = {
@@ -560,7 +569,15 @@ describe("compaction reporting", () => {
 	};
 
 	test("says nothing when the context is under the threshold", async () => {
-		const { manager, events } = collect([10]);
+		const { manager, events, turnContext } = collect([10]);
+
+		await manager.prepare(request, { turnContext });
+
+		expect(events).toEqual([]);
+	});
+
+	test("stays silent when no caller asked to be told", async () => {
+		const { manager, events } = collect([90, 90, 20]);
 
 		await manager.prepare(request);
 
@@ -568,22 +585,24 @@ describe("compaction reporting", () => {
 	});
 
 	test("announces the start before doing the expensive work", async () => {
-		const { manager, events } = collect([90, 90, 20]);
+		const { manager, events, turnContext } = collect([90, 90, 20]);
 
-		await manager.prepare(request);
+		await manager.prepare(request, { turnContext });
 
-		expect(events[0]).toEqual({
+		expect(events[0]).toMatchObject({
 			type: "context.compaction.started",
 			tokenCount: 90,
 			thresholdTokens: 75,
 			forced: false,
+			sessionId: "session-1",
+			turnId: "turn-1",
 		});
 	});
 
 	test("reports the outcome after the start", async () => {
-		const { manager, events } = collect([90, 90, 20]);
+		const { manager, events, turnContext } = collect([90, 90, 20]);
 
-		await manager.prepare(request);
+		await manager.prepare(request, { turnContext });
 		const completed = events[1];
 
 		expect(completed?.type).toBe("context.compaction.completed");
@@ -595,9 +614,9 @@ describe("compaction reporting", () => {
 	});
 
 	test("marks a manual compaction as forced even when well under threshold", async () => {
-		const { manager, events } = collect([10, 10, 5]);
+		const { manager, events, turnContext } = collect([10, 10, 5]);
 
-		await manager.prepare(request, { forceSummary: true });
+		await manager.prepare(request, { forceSummary: true, turnContext });
 
 		expect(events[0]).toMatchObject({
 			type: "context.compaction.started",
@@ -606,7 +625,7 @@ describe("compaction reporting", () => {
 	});
 
 	test("always closes the pair, so progress cannot hang on a failure", async () => {
-		const events: ContextCompactionEvent[] = [];
+		const events: RuntimeEvent[] = [];
 		const manager = new ContextManager({
 			tokenCounter: new FakeTokenCounter([90, 90, 90]),
 			summarizer: {
@@ -620,12 +639,11 @@ describe("compaction reporting", () => {
 			summaryMaxTokens: 4000,
 			protectedHeadMessages: 1,
 			protectedTailMessages: 1,
-			onCompaction: (event) => events.push(event),
 		});
 
-		await expect(manager.prepare(request)).rejects.toThrow(
-			"summarizer is down",
-		);
+		await expect(
+			manager.prepare(request, { turnContext: createTurnContext(events) }),
+		).rejects.toThrow("summarizer is down");
 		expect(events.map((event) => event.type)).toEqual([
 			"context.compaction.started",
 			"context.compaction.completed",
