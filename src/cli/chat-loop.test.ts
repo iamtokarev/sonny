@@ -26,7 +26,7 @@ function createSessionResult(
 	overrides: Partial<CreateAgentSessionResult> = {},
 ): CreateAgentSessionResult {
 	return {
-		session: {} as CreateAgentSessionResult["session"],
+		runtime: {} as CreateAgentSessionResult["runtime"],
 		historySession: createHistorySession(),
 		restoredMessageCount: 2,
 		restoredMessages: [],
@@ -124,6 +124,30 @@ describe("createRestoredUiMessages", () => {
 					role: "tool",
 					toolCallId: "tool-call-1",
 					content: "BLOCKED: secret",
+				},
+			]),
+		).toEqual([{ role: "tool", content: "readFile  .env  [denied]" }]);
+	});
+
+	test("uses persisted tool status without parsing tool content", () => {
+		expect(
+			createRestoredUiMessages([
+				{
+					role: "assistant",
+					content: "",
+					toolCalls: [
+						{
+							id: "tool-call-1",
+							name: "readFile",
+							parameters: { path: ".env" },
+						},
+					],
+				},
+				{
+					role: "tool",
+					toolCallId: "tool-call-1",
+					content: "Permission was declined.",
+					status: "denied",
 				},
 			]),
 		).toEqual([{ role: "tool", content: "readFile  .env  [denied]" }]);

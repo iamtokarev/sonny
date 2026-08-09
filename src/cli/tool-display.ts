@@ -1,4 +1,5 @@
-import type { ToolEvent } from "../tools/tool-executor";
+import type { ToolCompletionStatus } from "../domain";
+import type { ToolCompletedEvent } from "../events";
 
 const maxPreviewLength = 500;
 
@@ -53,14 +54,14 @@ export function formatToolPreview(
 export function formatToolResultPreview(
 	toolName: string,
 	content: string,
-	ok: boolean,
+	status: ToolCompletionStatus,
 ): string | null {
-	if (!ok && content.startsWith("BLOCKED:")) {
+	if (status === "denied") {
 		return "[denied]";
 	}
 
 	if (toolName === "readFile") {
-		return ok ? null : "[error]";
+		return status === "succeeded" ? null : "[error]";
 	}
 
 	if (toolName === "bash") {
@@ -86,7 +87,7 @@ export function formatToolResultPreview(
 				.filter(Boolean)
 				.join(" ");
 		} catch {
-			return ok ? null : "[error]";
+			return status === "succeeded" ? null : "[error]";
 		}
 	}
 
@@ -101,7 +102,7 @@ export function formatToolResultPreview(
 		}
 	}
 
-	if (!ok) {
+	if (status !== "succeeded") {
 		return "[error]";
 	}
 
@@ -109,14 +110,12 @@ export function formatToolResultPreview(
 	return preview.length === 0 ? null : truncate(preview, maxPreviewLength);
 }
 
-export function formatCompletedToolMessage(
-	event: Extract<ToolEvent, { type: "tool.completed" }>,
-): string {
+export function formatCompletedToolMessage(event: ToolCompletedEvent): string {
 	const preview = formatToolPreview(event.toolName, event.parameters);
 	const resultPreview = formatToolResultPreview(
 		event.toolName,
 		event.content,
-		event.ok,
+		event.status,
 	);
 
 	return [

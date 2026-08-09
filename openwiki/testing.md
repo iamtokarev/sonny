@@ -24,11 +24,12 @@ CI at `.github/workflows/ci.yml` runs `bun install --frozen-lockfile`, then `bun
 
 When changing the runtime, focus on the following areas first:
 
-- `src/runtime/*` — session assembly and dependency wiring
-- `src/tools/*` — approval, policy, and execution behavior
+- `src/runtime/*` — session assembly, `AgentRuntime` turn serialization, and dependency wiring
+- `src/events/*` — event bus dispatch, `publishRuntimeEvent()` safety, and event type coverage
+- `src/tools/*` — approval, policy, and execution behavior including event emission
 - `src/context/*` — compaction and token counting
 - `src/history/*` — resume/continue and JSONL persistence
-- `src/cli/*` and `src/commands/*` — command handling and TUI flow
+- `src/cli/*` and `src/commands/*` — command handling, TUI flow, and event subscription
 - `src/config/*` — schema parsing and environment overrides
 - `src/web/*` — optional search/read provider behavior
 
@@ -42,8 +43,9 @@ A change that touches the conversation lifecycle should usually verify:
 2. an existing session can resume
 3. slash commands still short-circuit deterministically
 4. tool approval still blocks unsafe calls
-5. compaction still preserves tool-call structure
-6. web tools still stay behind the Tavily configuration gate
+5. `turn.started`, `turn.completed`, and `tool.completed` events fire for the correct `sessionId` and `turnId`
+6. compaction still preserves tool-call structure
+7. web tools still stay behind the Tavily configuration gate
 
 ## Source anchors
 

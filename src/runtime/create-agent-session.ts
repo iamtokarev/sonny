@@ -10,6 +10,7 @@ import {
 	LlmContextSummarizer,
 } from "../context";
 import type { ChatMessage } from "../domain";
+import type { RuntimeEventPublisher } from "../events";
 import { HistoryRecorder, type HistorySession, HistoryStore } from "../history";
 import { LLMProvider } from "../llm";
 import { buildSkillsPrompt } from "../skills/build-skills-prompt";
@@ -18,14 +19,15 @@ import type { Skill } from "../skills/skill";
 import { createDefaultToolRegistry } from "../tools/create-tool-registry";
 import { createDefaultToolHooks } from "../tools/hooks/default-tool-hooks";
 import type { PermissionHook } from "../tools/hooks/tool-hooks";
-import { type ToolEventHandler, ToolExecutor } from "../tools/tool-executor";
+import { ToolExecutor } from "../tools/tool-executor";
 import { createLogger } from "../utils/logger";
 import { TavilyWebProvider } from "../web/tavily-web-provider";
+import { AgentRuntime } from "./agent-runtime";
 
 export type CreateAgentSessionMode = "new" | "resume" | "continue";
 
 export type CreateAgentSessionResult = {
-	session: AgentSession;
+	runtime: AgentRuntime;
 	historySession: HistorySession;
 	restoredMessageCount: number;
 	restoredMessages: ChatMessage[];
@@ -36,7 +38,7 @@ export type CreateAgentSessionResult = {
 export type CreateAgentSessionOptions = {
 	config: Config;
 	approveToolCall: PermissionHook;
-	onToolEvent?: ToolEventHandler;
+	events: RuntimeEventPublisher;
 	skillsDirectory?: string;
 	resumeSessionId?: string;
 	continueLatest?: boolean;
@@ -123,23 +125,31 @@ export async function createAgentSession(
 		webReadProvider: webProvider,
 	});
 	const hooks = createDefaultToolHooks(options.approveToolCall);
-	const toolExecutor = new ToolExecutor(tools, hooks, options.onToolEvent);
+	const toolExecutor = new ToolExecutor(tools, hooks);
 	const contextManager = new ContextManager({
 		tokenCounter: new GptTokenizerTokenCounter(),
 		summarizer: new LlmContextSummarizer(llm),
 		...options.config.contextCompaction,
 	});
 
+	const agentSession = new AgentSession(
+		systemPrompt,
+		state,
+		llm,
+		tools,
+		toolExecutor,
+		historyRecorder,
+		contextManager,
+	);
+
+	const runtime = new AgentRuntime({
+		sessionId: historySession.id,
+		session: agentSession,
+		events: options.events,
+	});
+
 	return {
-		session: new AgentSession(
-			systemPrompt,
-			state,
-			llm,
-			tools,
-			toolExecutor,
-			historyRecorder,
-			contextManager,
-		),
+		runtime,
 		historySession,
 		restoredMessageCount,
 		restoredMessages,

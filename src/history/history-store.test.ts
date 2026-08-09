@@ -177,6 +177,7 @@ describe("history-store", () => {
 			role: "tool",
 			toolCallId: "call-1",
 			content: "file contents",
+			status: "succeeded",
 		});
 
 		expect(store.readMessages(_SESSION_ID)).toEqual([
@@ -195,6 +196,7 @@ describe("history-store", () => {
 				role: "tool",
 				toolCallId: "call-1",
 				content: "file contents",
+				status: "succeeded",
 			},
 		]);
 	});

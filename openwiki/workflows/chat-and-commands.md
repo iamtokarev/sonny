@@ -21,8 +21,8 @@ The primary user experience is the `chat` command. Input is handled in two layer
 1. The user submits text in the terminal UI.
 2. The command registry checks whether the text is a slash command.
 3. If it is a slash command, the registry returns a result intent such as `message`, `submit`, `alias`, or `exit`.
-4. If it is not a slash command, the text is sent to the active agent session.
-5. Tool calls requested by the model are surfaced in the UI and may require explicit approval.
+4. If it is not a slash command, the text is sent to `AgentRuntime.runTurn()`, which creates a `TurnContext` and delegates to `AgentSession.chat()`.
+5. Tool calls requested by the model are surfaced in the UI via event bus subscription — `tool.started` and `tool.completed` events update the display in real time. Approval is still handled interactively when tool hooks request permission.
 
 ## Slash commands
 
@@ -47,7 +47,7 @@ The TUI shows a resumed-session banner when applicable and displays a final remi
 
 ## Tool approval in the UI
 
-When the model wants to call a tool, the UI pauses for approval if the tool hooks request permission. The approval prompt is part of the interactive loop, not a separate batch workflow.
+When the model wants to call a tool, the UI pauses for approval if the tool hooks request permission. The approval prompt is part of the interactive loop, not a separate batch workflow. After approval, `ToolExecutor` publishes `tool.started` and `tool.completed` events through the event bus; the chat loop subscribes (filtered by `sessionId`) and renders tool progress and results from those events rather than from direct return values.
 
 That design keeps high-risk operations explicit while still allowing the model to use tools for normal repository work.
 
@@ -55,7 +55,9 @@ That design keeps high-risk operations explicit while still allowing the model t
 
 - `src/cli/main.ts`
 - `src/cli/chat-loop.tsx`
+- `src/cli/tool-display.ts`
 - `src/commands/command.ts`
 - `src/commands/command-registry.ts`
 - `src/commands/create-command-registry.ts`
 - `src/commands/builtin/*`
+- `src/runtime/agent-runtime.ts`

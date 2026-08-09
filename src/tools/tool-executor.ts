@@ -1,36 +1,26 @@
 import type { ToolCall } from "../domain";
+import {
+	createEventMetadata,
+	publishRuntimeEvent,
+	type TurnContext,
+} from "../events";
 import { createLogger } from "../utils/logger";
 import type {
 	BaseToolHookContext,
 	PermissionHook,
 	ToolHooks,
 } from "./hooks/tool-hooks";
-import type { Tool, ToolResult } from "./tool";
+import { getToolCompletionStatus, type Tool, type ToolResult } from "./tool";
 import type { ToolRegistry } from "./tool-registry";
 
 export type ToolApprovalRequest = BaseToolHookContext;
 export type ToolApprovalDecision = Awaited<ReturnType<PermissionHook>>;
 export type ToolApprover = PermissionHook;
 
-export type ToolEvent =
-	| {
-			type: "tool.started";
-			toolCallId: string;
-			toolName: string;
-			parameters: unknown;
-			preview: string;
-	  }
-	| {
-			type: "tool.completed";
-			toolCallId: string;
-			toolName: string;
-			parameters: unknown;
-			ok: boolean;
-			content: string;
-			durationMs: number;
-	  };
-
-export type ToolEventHandler = (event: ToolEvent) => void;
+type ToolEventContext = Pick<
+	BaseToolHookContext,
+	"toolCallId" | "parameters" | "toolName"
+>;
 
 const logger = createLogger("tools.tool-executor");
 
@@ -70,10 +60,9 @@ export class ToolExecutor {
 	constructor(
 		private registry: ToolRegistry,
 		private hooks: ToolHooks,
-		private onToolEvent?: ToolEventHandler,
 	) {}
 
-	async execute(call: ToolCall): Promise<ToolResult> {
+	async execute(call: ToolCall, turnContext: TurnContext): Promise<ToolResult> {
 		let tool: Tool;
 		const startedAt = Date.now();
 
@@ -91,15 +80,16 @@ export class ToolExecutor {
 				toolCallId: call.id,
 			});
 
-			this.onToolEvent?.({
-				type: "tool.completed",
-				toolCallId: call.id,
-				toolName: call.name,
-				parameters: call.parameters,
-				ok: false,
-				content: result.error,
-				durationMs: Date.now() - startedAt,
-			});
+			this.publishToolCompleted(
+				turnContext,
+				{
+					toolCallId: call.id,
+					toolName: call.name,
+					parameters: call.parameters,
+				},
+				result,
+				Date.now() - startedAt,
+			);
 
 			return result;
 		}
@@ -142,6 +132,7 @@ export class ToolExecutor {
 				context: createContext(),
 				reason: `Blocked by policy: ${decision.reason}`,
 				durationMs: Date.now() - startedAt,
+				turnContext,
 			});
 		}
 
@@ -154,6 +145,7 @@ export class ToolExecutor {
 					reason:
 						"Permission was required, but no permission hook was configured.",
 					durationMs: Date.now() - startedAt,
+					turnContext,
 				});
 			}
 
@@ -177,6 +169,7 @@ export class ToolExecutor {
 							? "User denied this tool call."
 							: `User denied this tool call: ${decision.reason}`,
 					durationMs: Date.now() - startedAt,
+					turnContext,
 				});
 			}
 
@@ -191,7 +184,8 @@ export class ToolExecutor {
 			toolCallId: call.id,
 		});
 
-		this.onToolEvent?.({
+		publishRuntimeEvent(turnContext.events, {
+			...createEventMetadata(turnContext),
 			type: "tool.started",
 			toolCallId: call.id,
 			toolName: call.name,
@@ -221,25 +215,12 @@ export class ToolExecutor {
 				});
 			}
 
-			await this.runPostToolHooks(createContext(), result, durationMs);
-			await this.runFailureHooks(createContext(), result, durationMs);
-			const transformedResult = await this.runTransformHooks(
+			const transformedResult = await this.finalizeExecutedToolResult(
+				turnContext,
 				createContext(),
 				result,
 				durationMs,
 			);
-
-			this.onToolEvent?.({
-				type: "tool.completed",
-				toolCallId: call.id,
-				toolName: call.name,
-				parameters,
-				ok: transformedResult.ok,
-				content: transformedResult.ok
-					? transformedResult.content
-					: transformedResult.error,
-				durationMs,
-			});
 
 			return transformedResult;
 		} catch (error) {
@@ -259,25 +240,12 @@ export class ToolExecutor {
 				error: error instanceof Error ? error.message : String(error),
 			});
 
-			await this.runPostToolHooks(createContext(), result, durationMs);
-			await this.runFailureHooks(createContext(), result, durationMs);
-			const transformedResult = await this.runTransformHooks(
+			const transformedResult = await this.finalizeExecutedToolResult(
+				turnContext,
 				createContext(),
 				result,
 				durationMs,
 			);
-
-			this.onToolEvent?.({
-				type: "tool.completed",
-				toolCallId: call.id,
-				toolName: call.name,
-				parameters,
-				ok: transformedResult.ok,
-				content: transformedResult.ok
-					? transformedResult.content
-					: transformedResult.error,
-				durationMs,
-			});
 
 			return transformedResult;
 		}
@@ -287,10 +255,12 @@ export class ToolExecutor {
 		context,
 		reason,
 		durationMs,
+		turnContext,
 	}: {
 		context: BaseToolHookContext;
 		reason?: string;
 		durationMs: number;
+		turnContext: TurnContext;
 	}): Promise<ToolResult> {
 		const error = createBlockedToolMessage(reason);
 		const result = {
@@ -323,19 +293,56 @@ export class ToolExecutor {
 			durationMs,
 		);
 
-		this.onToolEvent?.({
+		this.publishToolCompleted(
+			turnContext,
+			context,
+			transformedResult,
+			durationMs,
+		);
+
+		return transformedResult;
+	}
+
+	private async finalizeExecutedToolResult(
+		turnContext: TurnContext,
+		context: BaseToolHookContext,
+		result: ToolResult,
+		durationMs: number,
+	): Promise<ToolResult> {
+		await this.runPostToolHooks(context, result, durationMs);
+		await this.runFailureHooks(context, result, durationMs);
+		const transformedResult = await this.runTransformHooks(
+			context,
+			result,
+			durationMs,
+		);
+
+		this.publishToolCompleted(
+			turnContext,
+			context,
+			transformedResult,
+			durationMs,
+		);
+
+		return transformedResult;
+	}
+
+	private publishToolCompleted(
+		turnContext: TurnContext,
+		context: ToolEventContext,
+		result: ToolResult,
+		durationMs: number,
+	): void {
+		publishRuntimeEvent(turnContext.events, {
+			...createEventMetadata(turnContext),
 			type: "tool.completed",
 			toolCallId: context.toolCallId,
 			toolName: context.toolName,
 			parameters: context.parameters,
-			ok: transformedResult.ok,
-			content: transformedResult.ok
-				? transformedResult.content
-				: transformedResult.error,
+			status: getToolCompletionStatus(result),
+			content: result.ok ? result.content : result.error,
 			durationMs,
 		});
-
-		return transformedResult;
 	}
 
 	private async runPostToolHooks(

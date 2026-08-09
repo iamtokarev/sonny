@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentSession } from "../agent";
 import type { Config } from "../config";
+import { InMemoryRuntimeEventBus } from "../events";
 import { HistoryStore } from "../history";
+import { AgentRuntime } from "./agent-runtime";
 import { createAgentSession } from "./create-agent-session";
 
 describe("createAgentSession", () => {
@@ -46,34 +47,25 @@ You are Sonny.
 		};
 	}
 
+	function createEventBus(): InMemoryRuntimeEventBus {
+		return new InMemoryRuntimeEventBus();
+	}
+
 	test("creates an agent session from config", async () => {
 		const config = await createTestConfig();
 
 		const result = await createAgentSession({
 			config,
+			events: createEventBus(),
 			approveToolCall: async () => ({
 				approved: true,
 			}),
 		});
 
-		expect(result.session).toBeInstanceOf(AgentSession);
+		expect(result.runtime).toBeInstanceOf(AgentRuntime);
 		expect(result.mode).toBe("new");
 		expect(result.restoredMessageCount).toBe(0);
 		expect(result.restoredMessages).toEqual([]);
-	});
-
-	test("accepts a tool event callback", async () => {
-		const config = await createTestConfig();
-
-		const result = await createAgentSession({
-			config,
-			approveToolCall: async () => ({
-				approved: true,
-			}),
-			onToolEvent: () => {},
-		});
-
-		expect(result.session).toBeInstanceOf(AgentSession);
 	});
 
 	test("creates history session files", async () => {
@@ -81,6 +73,7 @@ You are Sonny.
 
 		await createAgentSession({
 			config,
+			events: createEventBus(),
 			approveToolCall: async () => ({
 				approved: true,
 			}),
@@ -118,6 +111,7 @@ You are Sonny.
 
 		const result = await createAgentSession({
 			config,
+			events: createEventBus(),
 			approveToolCall: async () => ({
 				approved: true,
 			}),
@@ -130,9 +124,7 @@ You are Sonny.
 		expect(result.restoredMessages).toEqual([
 			{ role: "user", content: "Previous message" },
 		]);
-		expect(
-			(result.session as unknown as { systemPrompt: string }).systemPrompt,
-		).toBe("Stored prompt.");
+		expect(result.historySession.systemPrompt).toBe("Stored prompt.");
 	});
 
 	test("continues the latest non-empty history session", async () => {
@@ -166,6 +158,7 @@ You are Sonny.
 
 		const result = await createAgentSession({
 			config,
+			events: createEventBus(),
 			approveToolCall: async () => ({
 				approved: true,
 			}),
@@ -178,9 +171,7 @@ You are Sonny.
 		expect(result.restoredMessages).toEqual([
 			{ role: "user", content: "Newer message" },
 		]);
-		expect(
-			(result.session as unknown as { systemPrompt: string }).systemPrompt,
-		).toBe("Newer prompt.");
+		expect(result.historySession.systemPrompt).toBe("Newer prompt.");
 	});
 
 	test("throws clear error when resume session is missing", async () => {
@@ -189,6 +180,7 @@ You are Sonny.
 		await expect(
 			createAgentSession({
 				config,
+				events: createEventBus(),
 				approveToolCall: async () => ({
 					approved: true,
 				}),
@@ -203,6 +195,7 @@ You are Sonny.
 		await expect(
 			createAgentSession({
 				config,
+				events: createEventBus(),
 				approveToolCall: async () => ({
 					approved: true,
 				}),
@@ -217,6 +210,7 @@ You are Sonny.
 		await expect(
 			createAgentSession({
 				config,
+				events: createEventBus(),
 				approveToolCall: async () => ({
 					approved: true,
 				}),

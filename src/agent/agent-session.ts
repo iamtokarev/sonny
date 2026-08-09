@@ -5,7 +5,9 @@ import type {
 	TokenCountRequest,
 } from "../context";
 import type { ChatMessage, ToolCall } from "../domain";
+import type { TurnContext } from "../events";
 import type { HistoryRecorderSink } from "../history";
+import { getToolCompletionStatus } from "../tools/tool";
 import type { ToolExecutor } from "../tools/tool-executor";
 import type { ToolRegistry } from "../tools/tool-registry";
 import { createLogger } from "../utils/logger";
@@ -67,7 +69,7 @@ export class AgentSession {
 		return preparedContext;
 	}
 
-	async chat(message: string): Promise<string> {
+	async chat(message: string, turnContext: TurnContext): Promise<string> {
 		logger.info("chat.started", {
 			messageLength: message.length,
 			messageCount: this.state.messageCount,
@@ -142,12 +144,16 @@ export class AgentSession {
 				});
 
 				for (const toolCall of response.toolCalls) {
-					const toolResult = await this.toolExecutor.execute(toolCall);
+					const toolResult = await this.toolExecutor.execute(
+						toolCall,
+						turnContext,
+					);
 
 					this.state.addMessage({
 						role: "tool",
 						toolCallId: toolCall.id,
 						content: toolResult.ok ? toolResult.content : toolResult.error,
+						status: getToolCompletionStatus(toolResult),
 					});
 				}
 			}

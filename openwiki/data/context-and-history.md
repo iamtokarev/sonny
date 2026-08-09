@@ -23,7 +23,7 @@ A history session includes:
 - creation and update timestamps
 - the system prompt used for the session
 
-Messages are stored with timestamps so resumed sessions preserve their conversation order and can be inspected later.
+Messages are stored with timestamps so resumed sessions preserve their conversation order and can be inspected later. Runtime events (`turn.started`, `tool.completed`, etc.) are observation-only and are never persisted to session state or JSONL — they flow through the event bus to subscribers and are discarded.
 
 ## Resume and continue
 
