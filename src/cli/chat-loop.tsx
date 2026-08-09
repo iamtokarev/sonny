@@ -210,7 +210,9 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 
 	const isBusy = isThinking || isRunningCommand;
 
-	const cancelledRef = useRef(false);
+	// Aborting this is what actually stops a turn — the runtime cancels the
+	// request in flight rather than the UI ignoring a reply it no longer wants.
+	const turnAbortRef = useRef<AbortController | null>(null);
 	// Set when a compaction row was printed, so `/compact` does not also repeat
 	// itself as text.
 	const compactionReportedRef = useRef(false);
@@ -271,7 +273,7 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 			new Promise((resolve) => {
 				// A cancelled turn declines everything still in flight rather than
 				// asking you the same question once per queued tool call.
-				if (cancelledRef.current) {
+				if (turnAbortRef.current?.signal.aborted === true) {
 					resolve({ approved: false, reason: turnCancelledReason });
 					return;
 				}
@@ -338,6 +340,7 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					return;
 				case "turn.completed":
 				case "turn.failed":
+				case "turn.cancelled":
 					setTurnStartedAt(null);
 					setRunningTool(null);
 					return;
@@ -395,8 +398,10 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 				return;
 			}
 
+			const abort = new AbortController();
+			turnAbortRef.current = abort;
+
 			append([{ kind: "user", text }]);
-			cancelledRef.current = false;
 			setSendError(null);
 			setIsThinking(true);
 			setTurnStartedAt(Date.now());
@@ -406,9 +411,14 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 				const { content: response } = await session.runtime.runTurn({
 					content: text,
 					source: { kind: "cli" },
+					signal: abort.signal,
 				});
 
-				if (cancelledRef.current) {
+				logger.info("ui.submit.completed", { responseLength: response.length });
+				append([{ kind: "answer", text: response }]);
+			} catch (error) {
+				// A cancelled turn rejects too, but you asked for that.
+				if (abort.signal.aborted) {
 					logger.info("ui.submit.cancelled");
 					append([
 						{
@@ -421,9 +431,6 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					return;
 				}
 
-				logger.info("ui.submit.completed", { responseLength: response.length });
-				append([{ kind: "answer", text: response }]);
-			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				logger.error("ui.submit.failed", { error: message });
 				append([
@@ -439,7 +446,7 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 				setIsCancelling(false);
 				setTurnStartedAt(null);
 				setRunningTool(null);
-				cancelledRef.current = false;
+				turnAbortRef.current = null;
 			}
 		},
 		[append, session],
@@ -598,8 +605,9 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 			return;
 		}
 
-		cancelledRef.current = true;
+		turnAbortRef.current?.abort();
 		setIsCancelling(true);
+		// A tool waiting on you would otherwise hold the turn open past the abort.
 		resolveApproval({ approved: false, reason: turnCancelledReason });
 	}, [isThinking, resolveApproval]);
 
@@ -659,7 +667,7 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					resolveApproval({ approved: false, reason: userDenialReason });
 					return;
 				case "denyAndCancel":
-					cancelledRef.current = true;
+					turnAbortRef.current?.abort();
 					setIsCancelling(true);
 					resolveApproval({ approved: false, reason: turnCancelledReason });
 					return;

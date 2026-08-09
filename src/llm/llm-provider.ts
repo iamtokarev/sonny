@@ -19,11 +19,17 @@ type ChatOptions = Partial<
 
 export type ChatCompletionCreateParams = ChatCompletionCreateParamsNonStreaming;
 
+/** Per-request options, separate from the body so the signal is not sent. */
+export type ChatCompletionRequestOptions = {
+	signal?: AbortSignal;
+};
+
 export type ChatCompletionClient = {
 	chat: {
 		completions: {
 			create: (
 				params: ChatCompletionCreateParams,
+				options?: ChatCompletionRequestOptions,
 			) => PromiseLike<ChatCompletion>;
 		};
 	};
@@ -111,6 +117,8 @@ function normalizeStopReason(
 	return finishReason ?? "stop";
 }
 
+export type LLMChatOptions = ChatOptions & ChatCompletionRequestOptions;
+
 export type LLMChatResult = {
 	content: string;
 	toolCalls: ToolCall[];
@@ -147,8 +155,12 @@ export class LLMProvider {
 	async chat(
 		messages: ChatMessage[],
 		tools: ChatCompletionTool[] = [],
-		options?: ChatOptions,
+		options?: LLMChatOptions,
 	): Promise<LLMChatResult> {
+		// The signal belongs to the request, not the body — spreading it into the
+		// completion params would send it to the model as an unknown field.
+		const { signal, ...chatOptions } = options ?? {};
+
 		try {
 			const openAIMessages = toOpenAIMessages(messages);
 			logger.info("llm.request", {
@@ -157,14 +169,17 @@ export class LLMProvider {
 				toolCount: tools.length,
 			});
 
-			const completion = await this.client.chat.completions.create({
-				model: this.config.model,
-				messages: openAIMessages,
-				tools: tools.length > 0 ? tools : undefined,
-				temperature: this.config.temperature,
-				max_completion_tokens: this.config.maxTokens,
-				...options,
-			});
+			const completion = await this.client.chat.completions.create(
+				{
+					model: this.config.model,
+					messages: openAIMessages,
+					tools: tools.length > 0 ? tools : undefined,
+					temperature: this.config.temperature,
+					max_completion_tokens: this.config.maxTokens,
+					...chatOptions,
+				},
+				signal === undefined ? undefined : { signal },
+			);
 
 			const choice = completion.choices[0];
 			const message = choice?.message;
@@ -191,6 +206,12 @@ export class LLMProvider {
 				stopReason,
 			};
 		} catch (error) {
+			// A cancelled turn is not a provider failure, and wrapping it would
+			// hide the abort from the caller deciding how to report the turn.
+			if (signal?.aborted === true) {
+				throw error;
+			}
+
 			if (error instanceof LLMProviderError) {
 				logger.error("llm.error", {
 					errorName: error.name,

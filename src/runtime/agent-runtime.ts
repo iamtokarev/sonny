@@ -21,6 +21,8 @@ export interface AgentRuntimeSession extends AgentTurnSession {
 export interface AgentTurnInput {
 	readonly content: string;
 	readonly source: RuntimeSource;
+	/** Abort to give up on the turn; it stops instead of running to completion. */
+	readonly signal?: AbortSignal;
 }
 
 export interface AgentTurnResult {
@@ -75,17 +77,21 @@ export class AgentRuntime {
 		return run;
 	}
 
-	private createTurnContext(source: RuntimeSource): TurnContext {
+	private createTurnContext(
+		source: RuntimeSource,
+		signal?: AbortSignal,
+	): TurnContext {
 		return {
 			sessionId: this.options.sessionId,
 			turnId: randomUUIDv7(),
 			source,
 			events: this.options.events,
+			signal,
 		};
 	}
 
 	private async executeTurn(input: AgentTurnInput): Promise<AgentTurnResult> {
-		const turnContext = this.createTurnContext(input.source);
+		const turnContext = this.createTurnContext(input.source, input.signal);
 
 		publishRuntimeEvent(this.options.events, {
 			...createEventMetadata(turnContext),
@@ -115,15 +121,26 @@ export class AgentRuntime {
 		} catch (error) {
 			const durationMs = performance.now() - startedAt;
 
-			publishRuntimeEvent(this.options.events, {
-				...createEventMetadata(turnContext),
-				type: "turn.failed",
-				durationMs,
-				error: {
-					name: error instanceof Error ? error.name : "Error",
-					message: error instanceof Error ? error.message : String(error),
-				},
-			});
+			// A turn that stopped because it was asked to is not a broken turn,
+			// however the abort surfaced — a rejected request or a checkpoint.
+			publishRuntimeEvent(
+				this.options.events,
+				input.signal?.aborted === true
+					? {
+							...createEventMetadata(turnContext),
+							type: "turn.cancelled",
+							durationMs,
+						}
+					: {
+							...createEventMetadata(turnContext),
+							type: "turn.failed",
+							durationMs,
+							error: {
+								name: error instanceof Error ? error.name : "Error",
+								message: error instanceof Error ? error.message : String(error),
+							},
+						},
+			);
 
 			throw error;
 		}

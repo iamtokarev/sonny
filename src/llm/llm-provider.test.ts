@@ -277,3 +277,47 @@ describe("LLMProvider", () => {
 		}
 	});
 });
+
+describe("LLMProvider cancellation", () => {
+	test("passes the signal as a request option, not as part of the body", async () => {
+		const abort = new AbortController();
+		let seenParams: ChatCompletionCreateParams | undefined;
+		let seenOptions: { signal?: AbortSignal } | undefined;
+		const provider = new LLMProvider(config, {
+			chat: {
+				completions: {
+					async create(params, options) {
+						seenParams = params;
+						seenOptions = options;
+
+						return createCompletion({ content: "Hi" });
+					},
+				},
+			},
+		});
+
+		await provider.chat(messages, [], { signal: abort.signal });
+
+		expect(seenOptions?.signal).toBe(abort.signal);
+		expect(seenParams).not.toHaveProperty("signal");
+	});
+
+	test("lets an abort through instead of reporting it as a provider failure", async () => {
+		const abort = new AbortController();
+		const cause = new Error("The operation was aborted.");
+		const provider = new LLMProvider(config, {
+			chat: {
+				completions: {
+					async create() {
+						abort.abort();
+						throw cause;
+					},
+				},
+			},
+		});
+
+		await expect(
+			provider.chat(messages, [], { signal: abort.signal }),
+		).rejects.toBe(cause);
+	});
+});

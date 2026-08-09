@@ -194,6 +194,69 @@ describe("AgentSession", () => {
 		]);
 	});
 
+	test("stops at the next checkpoint once the turn is aborted", async () => {
+		const abort = new AbortController();
+		const llm = new FakeLLM(["Never asked"]);
+		const session = new AgentSession("You are Sonny.", state, llm);
+
+		abort.abort();
+
+		await expect(
+			session.chat("Hello", { ...createTurnContext(), signal: abort.signal }),
+		).rejects.toThrow();
+		expect(llm.calls).toHaveLength(0);
+	});
+
+	test("closes out tool calls a cancelled turn never ran", async () => {
+		const abort = new AbortController();
+		const tools = new ToolRegistry();
+		tools.register(testTool);
+		const toolExecutor = new ToolExecutor(tools, {});
+		// Cancelling lands mid-turn: the model has already asked for tools.
+		const llm = {
+			async chat() {
+				abort.abort();
+
+				return {
+					content: "",
+					stopReason: "tool_calls" as const,
+					toolCalls: [
+						{ id: "call_one", name: "read_test", parameters: {} },
+						{ id: "call_two", name: "read_test", parameters: {} },
+					],
+				};
+			},
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			toolExecutor,
+		);
+
+		await expect(
+			session.chat("Use a tool", {
+				...createTurnContext(),
+				signal: abort.signal,
+			}),
+		).rejects.toThrow();
+
+		// Every tool call the assistant made has a result, so the conversation is
+		// still valid to send again.
+		const messages = state.getMessages();
+		const assistant = messages.find((message) => message.role === "assistant");
+		const resultIds = messages
+			.filter((message) => message.role === "tool")
+			.map((message) => message.toolCallId);
+
+		expect(assistant?.role === "assistant" ? assistant.toolCalls : []).toEqual([
+			{ id: "call_one", name: "read_test", parameters: {} },
+			{ id: "call_two", name: "read_test", parameters: {} },
+		]);
+		expect(resultIds).toEqual(["call_one", "call_two"]);
+	});
+
 	test("adds failed tool results to the conversation", async () => {
 		const tools = new ToolRegistry();
 		const toolExecutor = new ToolExecutor(tools, {

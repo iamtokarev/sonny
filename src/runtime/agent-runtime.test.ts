@@ -106,6 +106,53 @@ describe("AgentRuntime", () => {
 		});
 	});
 
+	test("reports an aborted turn as cancelled rather than failed", async () => {
+		const eventBus = new InMemoryRuntimeEventBus();
+		const events: RuntimeEvent[] = [];
+		eventBus.subscribe((event) => {
+			events.push(event);
+		});
+		const abort = new AbortController();
+		const session: AgentTurnSession = {
+			async chat(_message, turnContext) {
+				abort.abort();
+				turnContext.signal?.throwIfAborted();
+
+				return "unreachable";
+			},
+		};
+		const runtime = createRuntime(session, eventBus);
+
+		await expect(
+			runtime.runTurn({ ...createInput("Hello"), signal: abort.signal }),
+		).rejects.toThrow();
+
+		expect(events.map((event) => event.type)).toEqual([
+			"turn.started",
+			"turn.cancelled",
+		]);
+	});
+
+	test("passes the caller's signal to the session so a turn can stop early", async () => {
+		const eventBus = new InMemoryRuntimeEventBus();
+		const abort = new AbortController();
+		let seen: AbortSignal | undefined;
+		const runtime = createRuntime(
+			{
+				async chat(_message, turnContext) {
+					seen = turnContext.signal;
+
+					return "Hi";
+				},
+			},
+			eventBus,
+		);
+
+		await runtime.runTurn({ ...createInput("Hello"), signal: abort.signal });
+
+		expect(seen).toBe(abort.signal);
+	});
+
 	test("emits a failed event and rethrows the original error", async () => {
 		const eventBus = new InMemoryRuntimeEventBus();
 		const events: RuntimeEvent[] = [];

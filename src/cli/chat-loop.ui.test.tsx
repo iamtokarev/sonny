@@ -231,10 +231,12 @@ describe("ChatApp runtime integration", () => {
 	});
 
 	test("routes normal input through AgentRuntime and renders its result", async () => {
-		const runTurn = mock(async () => ({
-			turnId: "turn-1",
-			content: "Runtime response",
-		}));
+		const inputs: AgentTurnInput[] = [];
+		const runTurn = mock(async (input: AgentTurnInput) => {
+			inputs.push(input);
+
+			return { turnId: "turn-1", content: "Runtime response" };
+		});
 		const harness = createInkHarness(new InMemoryRuntimeEventBus(), runTurn);
 
 		try {
@@ -243,10 +245,12 @@ describe("ChatApp runtime integration", () => {
 			await flush(harness);
 
 			expect(runTurn).toHaveBeenCalledTimes(1);
-			expect(runTurn).toHaveBeenCalledWith({
+			expect(inputs[0]).toMatchObject({
 				content: "hello runtime",
 				source: { kind: "cli" },
 			});
+			// Every turn is cancellable, so it carries a signal to cancel it with.
+			expect(inputs[0]?.signal).toBeInstanceOf(AbortSignal);
 			expect(harness.output()).toContain("Runtime response");
 		} finally {
 			harness.app.unmount();

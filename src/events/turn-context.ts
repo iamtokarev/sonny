@@ -21,4 +21,10 @@ export interface TurnContext {
 	readonly turnId: string;
 	readonly source: RuntimeSource;
 	readonly events: RuntimeEventPublisher;
+	/**
+	 * Aborted when the caller gives up on this turn. Everything the turn does
+	 * downstream is expected to stop at its next checkpoint rather than run to
+	 * completion for nobody.
+	 */
+	readonly signal?: AbortSignal;
 }

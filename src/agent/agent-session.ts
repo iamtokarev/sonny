@@ -25,10 +25,19 @@ type ChatModel = {
 	chat(
 		messages: ChatMessage[],
 		tools?: unknown[],
+		options?: { signal?: AbortSignal },
 	): Promise<string | ChatModelResult>;
 };
 
 const maxToolIterations = 10;
+
+/**
+ * A cancelled turn still has to leave a conversation the model can be sent
+ * again: every tool call the assistant made needs a result, even the ones that
+ * never ran.
+ */
+export const cancelledToolResult =
+	"This tool call was not run — the turn was cancelled by the user.";
 const logger = createLogger("core.agent-session");
 
 export class AgentSession {
@@ -79,6 +88,8 @@ export class AgentSession {
 			this.state.addMessage({ role: "user", content: message });
 
 			for (let iteration = 0; iteration < maxToolIterations; iteration++) {
+				turnContext.signal?.throwIfAborted();
+
 				const toolSchemas = this.tools?.getSchemas() ?? [];
 				await this.prepareContext(toolSchemas, turnContext);
 				const messages = this.state.buildMessages(this.systemPrompt);
@@ -89,7 +100,9 @@ export class AgentSession {
 					toolCount: toolSchemas.length,
 				});
 
-				const response = await this.llm.chat(messages, toolSchemas);
+				const response = await this.llm.chat(messages, toolSchemas, {
+					signal: turnContext.signal,
+				});
 
 				if (typeof response === "string") {
 					this.state.addMessage({ role: "assistant", content: response });
@@ -143,7 +156,12 @@ export class AgentSession {
 					toolCallCount: response.toolCalls.length,
 				});
 
-				for (const toolCall of response.toolCalls) {
+				for (const [index, toolCall] of response.toolCalls.entries()) {
+					if (turnContext.signal?.aborted === true) {
+						this.recordCancelledToolCalls(response.toolCalls.slice(index));
+						turnContext.signal.throwIfAborted();
+					}
+
 					const toolResult = await this.toolExecutor.execute(
 						toolCall,
 						turnContext,
@@ -175,6 +193,22 @@ export class AgentSession {
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}
+		}
+	}
+
+	/**
+	 * Closes out tool calls the turn never got to. Without these the assistant
+	 * message would keep tool calls with no results, which the API rejects on
+	 * the next request — so cancelling once would break the whole session.
+	 */
+	private recordCancelledToolCalls(toolCalls: ToolCall[]): void {
+		for (const toolCall of toolCalls) {
+			this.state.addMessage({
+				role: "tool",
+				toolCallId: toolCall.id,
+				content: cancelledToolResult,
+				status: "denied",
+			});
 		}
 	}
 

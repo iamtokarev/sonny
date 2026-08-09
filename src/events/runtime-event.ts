@@ -30,6 +30,12 @@ export interface TurnFailedEvent extends RuntimeEventBase {
 	};
 }
 
+/** The caller gave up on the turn; it stopped rather than broke. */
+export interface TurnCancelledEvent extends RuntimeEventBase {
+	readonly type: "turn.cancelled";
+	readonly durationMs: number;
+}
+
 export interface ToolStartedEvent extends RuntimeEventBase {
 	readonly type: "tool.started";
 	readonly toolCallId: string;
@@ -75,6 +81,7 @@ export type RuntimeEvent =
 	| TurnStartedEvent
 	| TurnCompletedEvent
 	| TurnFailedEvent
+	| TurnCancelledEvent
 	| ToolStartedEvent
 	| ToolCompletedEvent
 	| ContextCompactionStartedEvent
