@@ -5,6 +5,7 @@ import { AgentSession, buildSystemPrompt, SessionState } from "../agent";
 import { loadAgentDefinition } from "../agents/agents-loader";
 import type { Config } from "../config";
 import {
+	type ContextCompactionListener,
 	ContextManager,
 	GptTokenizerTokenCounter,
 	LlmContextSummarizer,
@@ -31,12 +32,16 @@ export type CreateAgentSessionResult = {
 	restoredMessages: ChatMessage[];
 	skills: Skill[];
 	mode: CreateAgentSessionMode;
+	/** Which tools this session actually got — web tools need an API key. */
+	toolNames: string[];
+	model: string;
 };
 
 export type CreateAgentSessionOptions = {
 	config: Config;
 	approveToolCall: PermissionHook;
 	onToolEvent?: ToolEventHandler;
+	onContextCompacted?: ContextCompactionListener;
 	skillsDirectory?: string;
 	resumeSessionId?: string;
 	continueLatest?: boolean;
@@ -128,6 +133,7 @@ export async function createAgentSession(
 		tokenCounter: new GptTokenizerTokenCounter(),
 		summarizer: new LlmContextSummarizer(llm),
 		...options.config.contextCompaction,
+		onCompaction: options.onContextCompacted,
 	});
 
 	return {
@@ -143,6 +149,8 @@ export async function createAgentSession(
 		historySession,
 		restoredMessageCount,
 		restoredMessages,
+		toolNames: tools.list().map((tool) => tool.name),
+		model: options.config.llm.model,
 		skills: skillsResult.skills,
 		mode,
 	};

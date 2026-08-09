@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { HistorySession } from "../history";
 import type { CreateAgentSessionResult } from "../runtime";
+import { restoreTranscript } from "../ui/transcript";
 import {
-	createRestoredUiMessages,
+	describeCompaction,
+	describeCompactionStart,
+	describeSessionHeader,
 	formatSessionExitSummary,
-	formatSessionStartupMessage,
 } from "./chat-loop";
 
 function createHistorySession(
@@ -32,56 +34,69 @@ function createSessionResult(
 		restoredMessages: [],
 		skills: [],
 		mode: "resume",
+		toolNames: ["bash", "readFile"],
+		model: "gpt-5.4-mini",
 		...overrides,
 	};
 }
 
-describe("formatSessionStartupMessage", () => {
-	test("does not format a startup message for new sessions", () => {
-		expect(
-			formatSessionStartupMessage(createSessionResult({ mode: "new" })),
-		).toBe(null);
+describe("describeSessionHeader", () => {
+	test("names Sonny and counts what the session actually got", () => {
+		const header = describeSessionHeader(createSessionResult({ mode: "new" }));
+
+		expect(header.glyph).toBe("sonny");
+		expect(header.title).toBe("Sonny");
+		expect(header.subtitle).toContain("gpt-5.4-mini");
+		expect(header.lines[0]).toBe("2 tools · 0 skills · new session");
 	});
 
-	test("formats resume startup message with title", () => {
-		expect(formatSessionStartupMessage(createSessionResult())).toBe(
-			"↻ Resumed Useful task (2 messages)",
+	test("leads with the session title when resuming", () => {
+		const header = describeSessionHeader(createSessionResult());
+
+		expect(header.glyph).toBe("resumed");
+		expect(header.title).toBe("Useful task");
+		expect(header.lines[0]).toBe("2 messages restored · session-1");
+	});
+
+	test("marks a continued session as the latest one", () => {
+		const header = describeSessionHeader(
+			createSessionResult({ mode: "continue" }),
 		);
+
+		expect(header.subtitle).toBe("· latest");
 	});
 
-	test("falls back to session id for untitled sessions", () => {
-		expect(
-			formatSessionStartupMessage(
-				createSessionResult({
-					historySession: createHistorySession({
-						id: "session-2",
-						title: "Untitled session",
-					}),
-					mode: "continue",
-					restoredMessageCount: 5,
+	test("falls back to the session id for untitled sessions", () => {
+		const header = describeSessionHeader(
+			createSessionResult({
+				historySession: createHistorySession({
+					id: "session-2",
+					title: "Untitled session",
 				}),
-			),
-		).toBe("↻ Resumed session-2 (5 messages)");
+			}),
+		);
+
+		expect(header.title).toBe("session-2");
 	});
 });
 
-describe("createRestoredUiMessages", () => {
-	test("converts persisted user and assistant messages to UI messages", () => {
+describe("restoreTranscript", () => {
+	test("drops the system prompt and keeps the conversation", () => {
 		expect(
-			createRestoredUiMessages([
+			restoreTranscript([
 				{ role: "system", content: "system prompt" },
 				{ role: "user", content: "Previous question" },
 				{ role: "assistant", content: "Previous answer" },
 			]),
 		).toEqual([
-			{ role: "user", content: "Previous question" },
-			{ role: "assistant", content: "Previous answer" },
+			{ kind: "user", text: "Previous question" },
+			{ kind: "answer", text: "Previous answer" },
 		]);
 	});
 
-	test("reconstructs compact tool messages from persisted tool calls", () => {
+	test("rebuilds tool rows without inventing a duration", () => {
 		expect(
-			createRestoredUiMessages([
+			restoreTranscript([
 				{
 					role: "assistant",
 					content: "",
@@ -96,37 +111,117 @@ describe("createRestoredUiMessages", () => {
 				{
 					role: "tool",
 					toolCallId: "tool-call-1",
-					content: JSON.stringify({
-						stdout: "pass",
-						stderr: "",
-						exitCode: 0,
-					}),
+					content: JSON.stringify({ stdout: "pass", stderr: "", exitCode: 0 }),
 				},
 			]),
-		).toEqual([{ role: "tool", content: "bash  bun test  pass" }]);
+		).toEqual([
+			{
+				kind: "tool",
+				row: {
+					toolName: "bash",
+					preview: "bun test",
+					duration: null,
+					status: "ok",
+					result: null,
+					detail: null,
+				},
+			},
+		]);
 	});
 
-	test("marks restored denied tool messages without blocked text", () => {
+	test("marks a restored blocked call as failed", () => {
+		const items = restoreTranscript([
+			{
+				role: "assistant",
+				content: "",
+				toolCalls: [
+					{ id: "tool-call-1", name: "readFile", parameters: { path: ".env" } },
+				],
+			},
+			{ role: "tool", toolCallId: "tool-call-1", content: "BLOCKED: secret" },
+		]);
+
+		expect(items).toEqual([
+			{
+				kind: "tool",
+				row: {
+					toolName: "readFile",
+					preview: ".env",
+					duration: null,
+					status: "error",
+					result: null,
+					detail: null,
+				},
+			},
+		]);
+	});
+});
+
+describe("describeCompactionStart", () => {
+	test("shows a running row so compaction is visible while it happens", () => {
 		expect(
-			createRestoredUiMessages([
-				{
-					role: "assistant",
-					content: "",
-					toolCalls: [
-						{
-							id: "tool-call-1",
-							name: "readFile",
-							parameters: { path: ".env" },
-						},
-					],
-				},
-				{
-					role: "tool",
-					toolCallId: "tool-call-1",
-					content: "BLOCKED: secret",
-				},
-			]),
-		).toEqual([{ role: "tool", content: "readFile  .env  [denied]" }]);
+			describeCompactionStart({
+				type: "context.compaction.started",
+				tokenCount: 150_000,
+				thresholdTokens: 150_000,
+				forced: false,
+			}),
+		).toEqual({
+			toolName: "compact",
+			preview: "at 100% of the compaction threshold",
+			duration: null,
+			status: "running",
+			result: null,
+			detail: null,
+		});
+	});
+
+	test("says what it is doing when you asked for it", () => {
+		expect(
+			describeCompactionStart({
+				type: "context.compaction.started",
+				tokenCount: 60_000,
+				thresholdTokens: 150_000,
+				forced: true,
+			}).preview,
+		).toBe("summarising the conversation");
+	});
+});
+
+describe("describeCompaction", () => {
+	test("reports summarised messages and the tokens saved", () => {
+		expect(
+			describeCompaction({
+				type: "context.compaction.completed",
+				tokenCountBefore: 118_900,
+				tokenCountAfter: 57_500,
+				compactedToolResultCount: 0,
+				summaryCompactedMessageCount: 22,
+				changed: true,
+				durationMs: 1700,
+			}),
+		).toEqual({
+			toolName: "compact",
+			preview: "summarised 22 messages",
+			duration: "1.7s",
+			status: "ok",
+			result: "−61,400 tokens",
+			detail: null,
+		});
+	});
+
+	test("reports trimmed tool results when no summary was needed", () => {
+		expect(
+			describeCompaction({
+				type: "context.compaction.completed",
+				tokenCountBefore: 71_000,
+				tokenCountAfter: 62_800,
+				compactedToolResultCount: 6,
+				summaryCompactedMessageCount: 0,
+				changed: true,
+				durationMs: 400,
+			}).preview,
+		).toBe("trimmed 6 tool results");
 	});
 });
 

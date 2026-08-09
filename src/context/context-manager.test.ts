@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ChatMessage } from "../domain";
 import {
 	CONTEXT_SUMMARY_HEADER,
+	type ContextCompactionEvent,
 	ContextManager,
 	MISSING_TOOL_RESULT_STUB,
 	sanitizeToolPairs,
@@ -523,5 +524,111 @@ describe("sanitizeToolPairs", () => {
 		];
 
 		expect(sanitizeToolPairs(messages)).toEqual(messages);
+	});
+});
+
+describe("compaction reporting", () => {
+	function collect(counts: number[]): {
+		manager: ContextManager;
+		events: ContextCompactionEvent[];
+	} {
+		const events: ContextCompactionEvent[] = [];
+		const manager = new ContextManager({
+			tokenCounter: new FakeTokenCounter(counts),
+			summarizer: new FakeSummarizer(),
+			contextWindowTokens: 100,
+			thresholdRatio: 0.75,
+			maxToolResultChars: 5,
+			summaryMaxTokens: 4000,
+			protectedHeadMessages: 1,
+			protectedTailMessages: 1,
+			onCompaction: (event) => events.push(event),
+		});
+
+		return { manager, events };
+	}
+
+	const request = {
+		systemPrompt: "system",
+		messages: [
+			{ role: "user", content: "one" },
+			{ role: "assistant", content: "two" },
+			{ role: "user", content: "three" },
+			{ role: "assistant", content: "four" },
+		] satisfies ChatMessage[],
+		tools: [],
+	};
+
+	test("says nothing when the context is under the threshold", async () => {
+		const { manager, events } = collect([10]);
+
+		await manager.prepare(request);
+
+		expect(events).toEqual([]);
+	});
+
+	test("announces the start before doing the expensive work", async () => {
+		const { manager, events } = collect([90, 90, 20]);
+
+		await manager.prepare(request);
+
+		expect(events[0]).toEqual({
+			type: "context.compaction.started",
+			tokenCount: 90,
+			thresholdTokens: 75,
+			forced: false,
+		});
+	});
+
+	test("reports the outcome after the start", async () => {
+		const { manager, events } = collect([90, 90, 20]);
+
+		await manager.prepare(request);
+		const completed = events[1];
+
+		expect(completed?.type).toBe("context.compaction.completed");
+
+		if (completed?.type === "context.compaction.completed") {
+			expect(completed.tokenCountBefore).toBe(90);
+			expect(completed.changed).toBe(true);
+		}
+	});
+
+	test("marks a manual compaction as forced even when well under threshold", async () => {
+		const { manager, events } = collect([10, 10, 5]);
+
+		await manager.prepare(request, { forceSummary: true });
+
+		expect(events[0]).toMatchObject({
+			type: "context.compaction.started",
+			forced: true,
+		});
+	});
+
+	test("always closes the pair, so progress cannot hang on a failure", async () => {
+		const events: ContextCompactionEvent[] = [];
+		const manager = new ContextManager({
+			tokenCounter: new FakeTokenCounter([90, 90, 90]),
+			summarizer: {
+				async summarize(): Promise<string> {
+					throw new Error("summarizer is down");
+				},
+			},
+			contextWindowTokens: 100,
+			thresholdRatio: 0.75,
+			maxToolResultChars: 5,
+			summaryMaxTokens: 4000,
+			protectedHeadMessages: 1,
+			protectedTailMessages: 1,
+			onCompaction: (event) => events.push(event),
+		});
+
+		await expect(manager.prepare(request)).rejects.toThrow(
+			"summarizer is down",
+		);
+		expect(events.map((event) => event.type)).toEqual([
+			"context.compaction.started",
+			"context.compaction.completed",
+		]);
 	});
 });

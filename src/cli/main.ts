@@ -41,14 +41,16 @@ program
 
 		logger.info("chat.command.started", sessionSelection);
 
-		const chatLoop = new ChatLoop((approveToolCall, onToolEvent) =>
-			createAgentSession({
-				config,
-				approveToolCall,
-				onToolEvent,
-				skillsDirectory: join(config.workspace, "skills"),
-				...sessionSelection,
-			}),
+		const chatLoop = new ChatLoop(
+			(approveToolCall, onToolEvent, onContextCompacted) =>
+				createAgentSession({
+					config,
+					approveToolCall,
+					onToolEvent,
+					onContextCompacted,
+					skillsDirectory: join(config.workspace, "skills"),
+					...sessionSelection,
+				}),
 		);
 
 		await chatLoop.run();

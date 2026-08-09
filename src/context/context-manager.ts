@@ -7,6 +7,31 @@ export const MISSING_TOOL_RESULT_STUB =
 	"[Result from earlier conversation - see context summary above]";
 export const CONTEXT_SUMMARY_HEADER = "[CONTEXT COMPACTION - REFERENCE ONLY]";
 
+/**
+ * Compaction can take seconds — summarising calls the model — and it changes
+ * what the agent remembers. Both facts are worth showing, so the manager
+ * reports when it starts as well as what it did.
+ */
+export type ContextCompactionEvent =
+	| {
+			type: "context.compaction.started";
+			tokenCount: number;
+			thresholdTokens: number;
+			/** True for `/compact`, false when the threshold triggered it. */
+			forced: boolean;
+	  }
+	| {
+			type: "context.compaction.completed";
+			tokenCountBefore: number;
+			tokenCountAfter: number;
+			compactedToolResultCount: number;
+			summaryCompactedMessageCount: number;
+			changed: boolean;
+			durationMs: number;
+	  };
+
+export type ContextCompactionListener = (event: ContextCompactionEvent) => void;
+
 export type ContextManagerOptions = {
 	tokenCounter: TokenCounter;
 	summarizer?: ContextSummarizer;
@@ -16,6 +41,7 @@ export type ContextManagerOptions = {
 	summaryMaxTokens: number;
 	protectedHeadMessages: number;
 	protectedTailMessages: number;
+	onCompaction?: ContextCompactionListener;
 };
 
 export type PreparedContext = {
@@ -197,8 +223,9 @@ export class ContextManager {
 		const thresholdTokens = this.getThresholdTokens();
 		const tokenCountBefore =
 			this.options.tokenCounter.countRequestTokens(request);
+		const forced = options.forceSummary === true;
 
-		if (!options.forceSummary && tokenCountBefore < thresholdTokens) {
+		if (!forced && tokenCountBefore < thresholdTokens) {
 			return {
 				messages: request.messages,
 				tokenCountBefore,
@@ -210,6 +237,62 @@ export class ContextManager {
 			};
 		}
 
+		// Past this point compaction is happening, so announce it before the
+		// expensive part rather than only reporting the outcome.
+		this.options.onCompaction?.({
+			type: "context.compaction.started",
+			tokenCount: tokenCountBefore,
+			thresholdTokens,
+			forced,
+		});
+
+		const startedAt = Date.now();
+
+		try {
+			const prepared = await this.compact(
+				request,
+				options,
+				tokenCountBefore,
+				thresholdTokens,
+			);
+
+			this.reportCompacted(prepared, startedAt);
+
+			return prepared;
+		} catch (error) {
+			// A listener that only hears "started" would show progress forever.
+			this.options.onCompaction?.({
+				type: "context.compaction.completed",
+				tokenCountBefore,
+				tokenCountAfter: tokenCountBefore,
+				compactedToolResultCount: 0,
+				summaryCompactedMessageCount: 0,
+				changed: false,
+				durationMs: Date.now() - startedAt,
+			});
+
+			throw error;
+		}
+	}
+
+	private reportCompacted(prepared: PreparedContext, startedAt: number): void {
+		this.options.onCompaction?.({
+			type: "context.compaction.completed",
+			tokenCountBefore: prepared.tokenCountBefore,
+			tokenCountAfter: prepared.tokenCountAfter,
+			compactedToolResultCount: prepared.compactedToolResultCount,
+			summaryCompactedMessageCount: prepared.summaryCompactedMessageCount,
+			changed: prepared.changed,
+			durationMs: Date.now() - startedAt,
+		});
+	}
+
+	private async compact(
+		request: TokenCountRequest,
+		options: PrepareContextOptions,
+		tokenCountBefore: number,
+		thresholdTokens: number,
+	): Promise<PreparedContext> {
 		const { messages, compactedToolResultCount } = this.compactToolMessages(
 			request.messages,
 		);
