@@ -26,16 +26,17 @@ The repository has evolved from a basic chat loop into a local agent platform. R
 
 ## How the runtime is organized
 
-At a high level, `src/cli/main.ts` starts the `chat` command, `src/cli/chat-loop.tsx` renders the TUI, and `src/runtime/create-agent-session.ts` wires together config, skills, history, tool registry, hooks, the LLM provider, and the context manager.
+At a high level, `src/cli/main.ts` starts the `chat` command and creates the event bus, `src/cli/chat-loop.tsx` renders the TUI and subscribes to events, `src/runtime/agent-runtime.ts` serializes turns and emits lifecycle events, and `src/runtime/create-agent-session.ts` wires together config, skills, history, tool registry, hooks, the LLM provider, the context manager, and the event bus.
 
 The central flow is:
 
 1. The CLI resolves `chat --resume` or `chat --continue` options.
-2. `createAgentSession()` loads or creates a history session and assembles runtime dependencies.
+2. `createAgentSession()` loads or creates a history session and assembles runtime dependencies, wrapping `AgentSession` in `AgentRuntime`.
 3. The chat loop accepts user text or slash commands.
 4. Slash commands are handled deterministically before any model call.
-5. Model tool calls are executed through `ToolExecutor`, which applies policy, approval, and result transforms.
-6. History is persisted to JSONL and can later be resumed or compacted.
+5. Regular chat input goes through `AgentRuntime.runTurn()`, which creates a `TurnContext` and publishes `turn.started` / `turn.completed` events.
+6. Model tool calls are executed through `ToolExecutor`, which applies policy, approval, and result transforms, and publishes `tool.started` / `tool.completed` events.
+7. History is persisted to JSONL and can later be resumed or compacted.
 
 ## Key concepts worth knowing first
 
@@ -51,7 +52,10 @@ If you want to jump straight into code, start with these files:
 
 - `src/cli/main.ts`
 - `src/cli/chat-loop.tsx`
+- `src/runtime/agent-runtime.ts`
 - `src/runtime/create-agent-session.ts`
+- `src/events/runtime-event.ts`
+- `src/events/event-bus.ts`
 - `src/tools/create-tool-registry.ts`
 - `src/tools/tool-executor.ts`
 - `src/context/context-manager.ts`

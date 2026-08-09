@@ -32,17 +32,19 @@ The default registry currently includes:
 
 ## Tool execution model
 
-Tool calls pass through this sequence:
+Tool calls pass through this sequence, with events published at each boundary:
 
 1. The model emits a tool call.
-2. Pre-tool hooks inspect and possibly modify the request.
-3. Policy hooks may deny unsafe calls or request user approval.
-4. The user-facing approval hook can accept or reject the action.
-5. The tool executes.
-6. Post-tool hooks, failure hooks, and result-transform hooks run.
-7. The result is emitted to the model and surfaced in the UI.
+2. `ToolExecutor.execute(call, turnContext)` publishes `tool.started` (with tool name, parameters, and a preview string).
+3. Pre-tool hooks inspect and possibly modify the request.
+4. Policy hooks may deny unsafe calls or request user approval.
+5. The user-facing approval hook can accept or reject the action.
+6. The tool executes.
+7. Post-tool hooks, failure hooks, and result-transform hooks run.
+8. `tool.completed` is published (with status, content, and `durationMs`) via `publishRuntimeEvent()`.
+9. The result is emitted to the model and surfaced in the UI.
 
-This layering keeps capability, safety, and presentation concerns separate.
+Events are published through the `RuntimeEventPublisher` carried by `TurnContext`, which is created per-turn by `AgentRuntime`. The `ToolCompletedEvent.status` field uses `ToolCompletionStatus` — the same type stored on `ToolMessage` in session state — ensuring consistency between runtime events, UI display, and persisted history. The [architecture overview](../architecture/overview.md) shows how `TurnContext` flows from `AgentRuntime` through `AgentSession` to `ToolExecutor`.
 
 ## Guardrails
 
@@ -55,7 +57,7 @@ The default hooks include:
 - result enrichment for recoverable failures
 - output truncation at 20,000 characters
 
-The file policy blocks dotenv basenames, selected sensitive files, known credential directories, and selected device paths; it resolves paths and follows existing symlinks but does **not** impose a general workspace-root boundary. `bash` is approval-gated but does not have a command allowlist or a workspace-only working-directory restriction in the current implementation. The executor returns a `BLOCKED:` payload that tells the model not to retry or bypass a denied action. These boundaries are intentionally important when extending the runtime and are surfaced by the [chat and command workflow](../workflows/chat-and-commands.md).
+The file policy blocks dotenv basenames, selected sensitive files, known credential directories, and selected device paths; it resolves paths and follows existing symlinks but does **not** impose a general workspace-root boundary. `bash` is approval-gated but does not have a command allowlist or a workspace-only working-directory restriction in the current implementation. The executor returns a `BLOCKED:` payload that tells the model not to retry or bypass a denied action. Tool denial and tool-not-found also emit `tool.completed` events with `status: "denied"` or `status: "not_found"` respectively, so the UI is always notified. These boundaries are intentionally important when extending the runtime and are surfaced by the [chat and command workflow](../workflows/chat-and-commands.md).
 
 ## Why this matters
 
