@@ -38,3 +38,6 @@ config.user.yaml
 
 # History files
 .history/
+
+# VS code settings
+.vscode/
