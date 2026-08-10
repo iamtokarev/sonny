@@ -22,11 +22,11 @@ Start here, then follow the linked pages for the major implementation areas:
 
 ## What this wiki covers
 
-The repository has evolved from a basic chat loop into a local agent platform. Recent work added tools, skills, JSONL persistence, slash commands, compaction, and web tools, so the wiki focuses on those seams rather than every source file.
+The repository has evolved from a basic chat loop into a local agent platform. Recent work added tools, skills, JSONL persistence, slash commands, compaction, and web tools; the latest changes rebuilt the TUI around a component-based Mulberry design system (`src/ui/`), added real turn cancellation via `AbortSignal`, and surfaced context compaction through the event bus, so the wiki focuses on those seams rather than every source file.
 
 ## How the runtime is organized
 
-At a high level, `src/cli/main.ts` starts the `chat` command and creates the event bus, `src/cli/chat-loop.tsx` renders the TUI and subscribes to events, `src/runtime/agent-runtime.ts` serializes turns and emits lifecycle events, and `src/runtime/create-agent-session.ts` wires together config, skills, history, tool registry, hooks, the LLM provider, the context manager, and the event bus.
+At a high level, `src/cli/main.ts` starts the `chat` command and creates the event bus, `src/cli/chat-loop.tsx` renders the declarative Ink TUI (built on the Mulberry design system in `src/ui/`) and subscribes to events, `src/runtime/agent-runtime.ts` serializes turns and emits lifecycle events (including `turn.cancelled` for aborted turns), and `src/runtime/create-agent-session.ts` wires together config, skills, history, tool registry, hooks, the LLM provider, the context manager, and the event bus.
 
 The central flow is:
 
@@ -34,7 +34,7 @@ The central flow is:
 2. `createAgentSession()` loads or creates a history session and assembles runtime dependencies, wrapping `AgentSession` in `AgentRuntime`.
 3. The chat loop accepts user text or slash commands.
 4. Slash commands are handled deterministically before any model call.
-5. Regular chat input goes through `AgentRuntime.runTurn()`, which creates a `TurnContext` and publishes `turn.started` / `turn.completed` events.
+5. Regular chat input goes through `AgentRuntime.runTurn()`, which creates a `TurnContext` (carrying an `AbortSignal` for cancellation) and publishes `turn.started` / `turn.completed` / `turn.cancelled` events.
 6. Model tool calls are executed through `ToolExecutor`, which applies policy, approval, and result transforms, and publishes `tool.started` / `tool.completed` events.
 7. History is persisted to JSONL and can later be resumed or compacted.
 
@@ -63,9 +63,12 @@ If you want to jump straight into code, start with these files:
 - `src/skills/load-skills.ts`
 - `src/web/tavily-web-provider.ts`
 - `src/config/load-config.ts`
+- `src/ui/key-router.ts`
+- `src/ui/tool-row.ts`
+- `src/ui/transcript.ts`
 - `.github/workflows/ci.yml`
 
 ## Backlog
 
-- **Live-provider and TUI validation** — `src/llm/llm-provider.ts`, `src/web/tavily-web-provider.ts`, and `src/cli/chat-loop.tsx`; current coverage is primarily unit/mock based, so a real-provider and terminal acceptance guide is deferred.
+- **Live-provider validation** — `src/llm/llm-provider.ts` and `src/web/tavily-web-provider.ts`; current coverage is primarily unit/mock based, so a real-provider acceptance guide is deferred.
 - **Web V1 hardening** — `src/tools/policies/web-url-policy.ts`; DNS resolution, rebinding, and redirect validation are explicitly outside the present policy.

@@ -24,12 +24,14 @@ CI at `.github/workflows/ci.yml` runs `bun install --frozen-lockfile`, then `bun
 
 When changing the runtime, focus on the following areas first:
 
-- `src/runtime/*` — session assembly, `AgentRuntime` turn serialization, and dependency wiring
-- `src/events/*` — event bus dispatch, `publishRuntimeEvent()` safety, and event type coverage
+- `src/runtime/*` — session assembly, `AgentRuntime` turn serialization, dependency wiring, and `turn.cancelled` event reporting
+- `src/events/*` — event bus dispatch, `publishRuntimeEvent()` safety, event type coverage including `context.compaction.started` / `context.compaction.completed`
 - `src/tools/*` — approval, policy, and execution behavior including event emission
-- `src/context/*` — compaction and token counting
+- `src/context/*` — compaction, token counting, and compaction event publishing through `TurnContext`
 - `src/history/*` — resume/continue and JSONL persistence
-- `src/cli/*` and `src/commands/*` — command handling, TUI flow, and event subscription
+- `src/cli/*` and `src/commands/*` — command handling, TUI flow, event subscription, turn cancellation via `AbortSignal`, and transcript restoration
+- `src/ui/*` — pure-logic modules (theme, markdown, text-input, key-router, tool-row, transcript, context-meter), component rendering via `src/ui/test-support/ink-harness.tsx`, and tool outcome classification
+- `src/llm/*` — signal passing as a request option and abort error re-throwing
 - `src/config/*` — schema parsing and environment overrides
 - `src/web/*` — optional search/read provider behavior
 
@@ -44,8 +46,9 @@ A change that touches the conversation lifecycle should usually verify:
 3. slash commands still short-circuit deterministically
 4. tool approval still blocks unsafe calls
 5. `turn.started`, `turn.completed`, and `tool.completed` events fire for the correct `sessionId` and `turnId`
-6. compaction still preserves tool-call structure
-7. web tools still stay behind the Tavily configuration gate
+6. turn cancellation stops at the next checkpoint, records synthetic "denied" results for pending tool calls, and publishes `turn.cancelled` (not `turn.failed`)
+7. compaction still preserves tool-call structure and publishes paired `context.compaction.started` / `context.compaction.completed` events even on failure
+8. web tools still stay behind the Tavily configuration gate
 
 ## Source anchors
 

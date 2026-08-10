@@ -41,6 +41,15 @@ The runtime reads the persisted JSONL file back into memory when resuming or con
 
 The compaction strategy preserves the beginning and end of the conversation and only replaces the middle region when needed. This is important because the opening instructions and the most recent user context are usually the most valuable pieces of state.
 
+### Compaction events
+
+Compaction is reported through the event bus so the TUI shows progress in real time rather than inferring it from timing or command results:
+
+- **`context.compaction.started`** — published before the expensive summarization step. Carries `tokenCount`, `thresholdTokens`, and `forced` (`true` for manual `/compact`, `false` for threshold-triggered auto-compaction).
+- **`context.compaction.completed`** — published after compaction finishes (or fails). Carries `tokenCountBefore`, `tokenCountAfter`, `compactedToolResultCount`, `summaryCompactedMessageCount`, `changed` (whether anything was modified), and `durationMs`.
+
+Events are published through the `TurnContext` carried into `contextManager.prepare()`. If `compact()` throws, a "completed" event with `changed: false` is still emitted so no "started" event dangles. Manual `/compact` runs through `AgentRuntime.compactContext()`, which creates a synthetic `TurnContext` with a `system` source and enqueues through the same serialization queue as turns, preventing compaction from overlapping a running turn. See [architecture overview](../architecture/overview.md) for how these events flow through the bus to the TUI.
+
 ### What compaction preserves
 
 - early session context that anchors the conversation

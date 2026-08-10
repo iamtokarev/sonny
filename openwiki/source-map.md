@@ -22,12 +22,38 @@ This page is a navigation aid for the code paths that matter most in the first-p
 
 ## Event system
 
-- `src/events/runtime-event.ts` — event catalog (`RuntimeEvent` discriminated union)
+- `src/events/runtime-event.ts` — event catalog (`RuntimeEvent` discriminated union, including `turn.cancelled`, `context.compaction.started`, `context.compaction.completed`)
 - `src/events/event-bus.ts` — `RuntimeEventBus` and `RuntimeEventPublisher` interfaces
 - `src/events/in-memory-event-bus.ts` — synchronous in-process bus implementation
-- `src/events/turn-context.ts` — `TurnContext` and `RuntimeSource` types
+- `src/events/turn-context.ts` — `TurnContext` (with optional `AbortSignal`) and `RuntimeSource` types
 - `src/events/publish-runtime-event.ts` — safe-publish helper
 - `src/events/index.ts` — barrel exports
+
+## TUI layer (Mulberry design system)
+
+- `src/ui/theme.ts` — Mulberry color palette (rich/basic/monochrome tiers with auto-detection) and glyph definitions
+- `src/ui/markdown.ts` — minimal markdown parser (headings, code, bullets, emphasis)
+- `src/ui/text-input.ts` — pure reducer for the composer's editing model (cursor, word-delete, history navigation)
+- `src/ui/key-router.ts` — central keystroke-to-intent dispatcher across four modes (idle, busy, approval, popup)
+- `src/ui/tool-row.ts` — formats tool calls as one-line summaries; classifies `ToolCompletionStatus` into display status with per-tool result summarisation
+- `src/ui/transcript.ts` — `TranscriptItem` model and `restoreTranscript()` for replaying history through the same renderers as live output
+- `src/ui/ui-context.tsx` — React context threading `Theme` and `TerminalLayout` to all components
+- `src/ui/context-meter.ts` — token usage model (percent, zones, 10-cell bar) shared by `/context` and the composer
+- `src/ui/approval.ts` — builds `ApprovalModel` from `ToolApprovalRequest` (per-tool verbs, diff bodies, content previews)
+- `src/ui/command-popup.ts` — slash-command filtering and closest-match logic
+- `src/ui/use-terminal-size.ts` — hook for terminal columns/rows with narrow/wide breakpoints
+- `src/ui/use-ticker.ts` — hooks for spinner animation and elapsed-seconds timer
+- `src/ui/wrap.ts` — word-wrap and pad-to-width utilities
+- `src/ui/components/transcript-view.tsx` — renders finished transcript items via Ink `<Static>` (scrollback, never redrawn)
+- `src/ui/components/composer.tsx` — persistent input bar with cursor, placeholder, hint row, and state colors
+- `src/ui/components/tool-row-view.tsx` — one-line tool call rendering with spinner while running
+- `src/ui/components/approval-pane.tsx` — replaces composer row for tool approval prompts with diff-style display
+- `src/ui/components/command-popup.tsx` — floating slash-command autocomplete
+- `src/ui/components/context-meter.tsx` — visual token meter with `▰▱` cells
+- `src/ui/components/answer.tsx` — renders assistant answers with markdown parsing
+- `src/ui/components/user-turn.tsx` — full-width banded user message rendering
+- `src/ui/components/notice.tsx` — info/warn/error notices below the conversation
+- `src/ui/components/status-row.tsx` — "Working…" status with spinner and elapsed timer
 
 ## Tools and guardrails
 
@@ -40,7 +66,7 @@ This page is a navigation aid for the code paths that matter most in the first-p
 
 ## Context and history
 
-- `src/context/context-manager.ts` — token estimation and compaction
+- `src/context/context-manager.ts` — token estimation, compaction, and compaction event publishing
 - `src/context/token-counter.ts` — token counting
 - `src/context/llm-context-summarizer.ts` — LLM-backed summarization
 - `src/history/history-store.ts` — JSONL session persistence
@@ -68,8 +94,9 @@ This page is a navigation aid for the code paths that matter most in the first-p
 
 ## What to read first when changing something
 
-- If the change affects user input or slash commands, start with `src/cli/chat-loop.tsx` and `src/commands/*`.
+- If the change affects user input or slash commands, start with `src/cli/chat-loop.tsx`, `src/ui/key-router.ts`, and `src/commands/*`.
 - If the change affects event types or the event bus, start with `src/events/*` and `src/runtime/agent-runtime.ts`.
+- If the change affects TUI rendering, theming, or component layout, start with `src/ui/theme.ts`, `src/ui/components/*`, and `src/ui/transcript.ts`.
 - If the change affects capabilities or safety, start with `src/tools/*`.
 - If the change affects prompt size or long conversations, start with `src/context/*` and `src/history/*`.
 - If the change affects startup or environment setup, start with `src/config/*` and `src/runtime/create-agent-session.ts`.
