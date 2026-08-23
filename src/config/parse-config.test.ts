@@ -30,6 +30,31 @@ describe("parseConfig", () => {
 		});
 	});
 
+	test("accepts an optional reasoningEffort and rejects an invalid one", () => {
+		const config = parseConfig(
+			{
+				llm: {
+					model: "gpt-4.1",
+					reasoningEffort: "high",
+				},
+				defaultAgent: "sonny",
+			},
+			{ llmApiKey: "test-key" },
+		);
+
+		expect(config.llm.reasoningEffort).toBe("high");
+
+		expect(() =>
+			parseConfig(
+				{
+					llm: { model: "gpt-4.1", reasoningEffort: "extreme" },
+					defaultAgent: "sonny",
+				},
+				{ llmApiKey: "test-key" },
+			),
+		).toThrow();
+	});
+
 	test("applies Tavily API key without an LLM API key override", () => {
 		const config = parseConfig(
 			{

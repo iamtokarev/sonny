@@ -1,3 +1,4 @@
+import type { ToolSchema } from "../domain";
 import type { Tool } from "./tool";
 
 export class ToolRegistry {
@@ -25,14 +26,11 @@ export class ToolRegistry {
 		return Array.from(this.tools.values());
 	}
 
-	getSchemas(): unknown[] {
+	getSchemas(): ToolSchema[] {
 		return Array.from(this.tools.values()).map((tool) => ({
-			type: "function",
-			function: {
-				name: tool.name,
-				description: tool.description,
-				parameters: tool.parameters,
-			},
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters,
 		}));
 	}
 }

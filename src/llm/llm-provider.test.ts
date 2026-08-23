@@ -1,16 +1,13 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
-import type {
-	ChatFunctionToolFunction,
-	ChatResult,
-	ChatToolCall,
-} from "@openrouter/sdk/models";
+import type { ChatResult, ChatToolCall } from "@openrouter/sdk/models";
 import type { LLMConfig } from "../config";
-import type { ChatMessage } from "../domain";
+import type { ChatMessage, ToolSchema } from "../domain";
 import {
-	type ChatCompletionClient,
-	type ChatCompletionCreateParams,
+	type ChatClient,
+	type ChatSendParams,
 	LLMProvider,
 	LLMProviderError,
+	toOpenRouterTool,
 } from "./llm-provider";
 
 const config: LLMConfig = {
@@ -23,10 +20,8 @@ const config: LLMConfig = {
 const messages: ChatMessage[] = [{ role: "user", content: "Hello" }];
 
 function createFakeClient(
-	send: (request: {
-		chatRequest: ChatCompletionCreateParams;
-	}) => PromiseLike<ChatResult>,
-): ChatCompletionClient {
+	send: (request: { chatRequest: ChatSendParams }) => PromiseLike<ChatResult>,
+): ChatClient {
 	return {
 		chat: {
 			send,
@@ -67,9 +62,7 @@ function createMockSend(
 	},
 ) {
 	return mock(
-		async (_request: {
-			chatRequest: ChatCompletionCreateParams;
-		}): Promise<ChatResult> =>
+		async (_request: { chatRequest: ChatSendParams }): Promise<ChatResult> =>
 			createChatResult({
 				content,
 				toolCalls: options?.toolCalls,
@@ -125,24 +118,40 @@ describe("LLMProvider", () => {
 		});
 	});
 
-	test("sends tool schemas when provided", async () => {
-		const tools: ChatFunctionToolFunction[] = [
+	test("sends the configured reasoningEffort, overridable per call", async () => {
+		const providerWithReasoning = new LLMProvider(
+			{ ...config, reasoningEffort: "high" },
+			createFakeClient(send),
+		);
+
+		await providerWithReasoning.chat(messages);
+
+		expect(send.mock.calls[0]?.[0].chatRequest.reasoningEffort).toBe("high");
+
+		await providerWithReasoning.chat(messages, [], {
+			reasoningEffort: "low",
+		});
+
+		expect(send.mock.calls[1]?.[0].chatRequest.reasoningEffort).toBe("low");
+	});
+
+	test("sends tool schemas when provided, translated to the wire format", async () => {
+		const tools: ToolSchema[] = [
 			{
-				type: "function",
-				function: {
-					name: "read_file",
-					description: "Read a file",
-					parameters: {
-						type: "object",
-						properties: {},
-					},
+				name: "read_file",
+				description: "Read a file",
+				parameters: {
+					type: "object",
+					properties: {},
 				},
 			},
 		];
 
 		await provider.chat(messages, tools);
 
-		expect(send.mock.calls[0]?.[0].chatRequest.tools).toBe(tools);
+		expect(send.mock.calls[0]?.[0].chatRequest.tools).toEqual(
+			tools.map(toOpenRouterTool),
+		);
 	});
 
 	test("converts Sonny assistant and tool messages to OpenRouter messages", async () => {
@@ -231,7 +240,7 @@ describe("LLMProvider", () => {
 		});
 	});
 
-	test("uses empty parameters when tool call arguments are invalid JSON", async () => {
+	test("preserves raw arguments when tool call arguments are invalid JSON", async () => {
 		send = createMockSend(null, {
 			toolCalls: [createFunctionToolCall("{not-json")],
 			finishReason: "tool_calls",
@@ -245,6 +254,53 @@ describe("LLMProvider", () => {
 				id: "call_test",
 				name: "read_file",
 				parameters: {},
+				rawArguments: "{not-json",
+			},
+		]);
+	});
+
+	test("replays the model's raw malformed arguments verbatim on retry, instead of re-serializing {}", async () => {
+		const malformedToolCallMessages: ChatMessage[] = [
+			{
+				role: "assistant",
+				content: "",
+				toolCalls: [
+					{
+						id: "call_test",
+						name: "read_file",
+						parameters: {},
+						rawArguments: "{not-json",
+					},
+				],
+			},
+			{
+				role: "tool",
+				content: "Malformed arguments",
+				toolCallId: "call_test",
+			},
+		];
+
+		await provider.chat(malformedToolCallMessages);
+
+		expect(send.mock.calls[0]?.[0].chatRequest.messages).toEqual([
+			{
+				role: "assistant",
+				content: null,
+				toolCalls: [
+					{
+						id: "call_test",
+						type: "function",
+						function: {
+							name: "read_file",
+							arguments: "{not-json",
+						},
+					},
+				],
+			},
+			{
+				role: "tool",
+				content: "Malformed arguments",
+				toolCallId: "call_test",
 			},
 		]);
 	});
@@ -263,7 +319,7 @@ describe("LLMProvider", () => {
 		const cause = new Error("network failed");
 		const send = mock(
 			async (_request: {
-				chatRequest: ChatCompletionCreateParams;
+				chatRequest: ChatSendParams;
 			}): Promise<ChatResult> => {
 				throw cause;
 			},
@@ -284,7 +340,7 @@ describe("LLMProvider", () => {
 describe("LLMProvider cancellation", () => {
 	test("passes the signal as a request option, not as part of the body", async () => {
 		const abort = new AbortController();
-		let seenRequest: { chatRequest: ChatCompletionCreateParams } | undefined;
+		let seenRequest: { chatRequest: ChatSendParams } | undefined;
 		let seenOptions: { signal?: AbortSignal } | undefined;
 		const provider = new LLMProvider(config, {
 			chat: {

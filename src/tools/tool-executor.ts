@@ -94,6 +94,35 @@ export class ToolExecutor {
 			return result;
 		}
 
+		if (call.rawArguments !== undefined) {
+			const result = {
+				ok: false as const,
+				error:
+					`The arguments for "${call.name}" were not valid JSON: ` +
+					`${call.rawArguments}. Retry the call with valid JSON arguments.`,
+				reason: "invalid_arguments" as const,
+			};
+
+			logger.warn("tool.invalid_arguments", {
+				toolName: call.name,
+				toolCallId: call.id,
+				rawArguments: call.rawArguments,
+			});
+
+			this.publishToolCompleted(
+				turnContext,
+				{
+					toolCallId: call.id,
+					toolName: call.name,
+					parameters: call.parameters,
+				},
+				result,
+				Date.now() - startedAt,
+			);
+
+			return result;
+		}
+
 		let parameters = call.parameters;
 		let permissionRequired = false;
 		let permissionReason: string | undefined;

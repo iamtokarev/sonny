@@ -8,7 +8,7 @@ import type {
 	ChatToolCall,
 } from "@openrouter/sdk/models";
 import type { LLMConfig } from "../config";
-import type { ChatMessage, ToolCall } from "../domain";
+import type { ChatMessage, ToolCall, ToolSchema } from "../domain";
 import { createLogger } from "../utils/logger";
 
 type ChatOptions = Partial<{
@@ -17,27 +17,53 @@ type ChatOptions = Partial<{
 	reasoningEffort: ChatRequestReasoningEffort;
 }>;
 
-export type ChatCompletionCreateParams = {
+export type ChatSendParams = {
 	model: string;
 	messages: ChatMessages[];
 	tools?: ChatFunctionToolFunction[];
 } & ChatOptions;
 
-export type ChatCompletionRequestOptions = {
+export type ChatSendOptions = {
 	signal?: AbortSignal;
 };
 
-export type ChatCompletionClient = {
+export type ChatClient = {
 	chat: {
 		send: (
-			request: { chatRequest: ChatCompletionCreateParams },
-			options?: ChatCompletionRequestOptions,
+			request: { chatRequest: ChatSendParams },
+			options?: ChatSendOptions,
 		) => PromiseLike<ChatResult>;
 	};
 };
 
 export type LLMStopReason = "stop" | "tool_calls" | "length" | "content_filter";
 const logger = createLogger("providers.llm-provider");
+
+/** Translates a vendor-neutral tool schema into OpenRouter's wire format. */
+export function toOpenRouterTool(schema: ToolSchema): ChatFunctionToolFunction {
+	return {
+		type: "function",
+		function: {
+			name: schema.name,
+			description: schema.description,
+			parameters: schema.parameters,
+		},
+	};
+}
+
+/**
+ * Translates a Sonny tool call into OpenRouter's wire format.
+ */
+export function toOpenRouterToolCall(toolCall: ToolCall): ChatToolCall {
+	return {
+		id: toolCall.id,
+		type: "function",
+		function: {
+			name: toolCall.name,
+			arguments: toolCall.rawArguments ?? JSON.stringify(toolCall.parameters),
+		},
+	};
+}
 
 function toOpenRouterMessage(message: ChatMessage): ChatMessages {
 	switch (message.role) {
@@ -59,14 +85,7 @@ function toOpenRouterMessage(message: ChatMessage): ChatMessages {
 			return {
 				role: "assistant",
 				content: message.content || null,
-				toolCalls: message.toolCalls?.map((toolCall) => ({
-					id: toolCall.id,
-					type: "function",
-					function: {
-						name: toolCall.name,
-						arguments: JSON.stringify(toolCall.parameters),
-					},
-				})),
+				toolCalls: message.toolCalls.map(toOpenRouterToolCall),
 			};
 
 		case "tool":
@@ -82,22 +101,29 @@ function toOpenRouterMessages(messages: ChatMessage[]): ChatMessages[] {
 	return messages.map(toOpenRouterMessage);
 }
 
-function parseToolArguments(argumentsJson: string): unknown {
+function parseToolArguments(argumentsJson: string): {
+	parameters: unknown;
+	rawArguments?: string;
+} {
 	try {
-		return JSON.parse(argumentsJson);
+		return { parameters: JSON.parse(argumentsJson) };
 	} catch {
-		return {};
+		return { parameters: {}, rawArguments: argumentsJson };
 	}
 }
 
 function toSonnyToolCall(toolCall: ChatToolCall): ToolCall {
+	const { parameters, rawArguments } = parseToolArguments(
+		toolCall.function.arguments,
+	);
+
 	return {
 		id: toolCall.id,
 		name: toolCall.function.name,
-		parameters: parseToolArguments(toolCall.function.arguments),
+		parameters,
+		rawArguments,
 	};
 }
-
 
 function extractTextContent(
 	content: string | ChatContentItems[] | null | undefined,
@@ -142,7 +168,7 @@ function normalizeStopReason(
 	return "stop";
 }
 
-export type LLMChatOptions = ChatOptions & ChatCompletionRequestOptions;
+export type LLMChatOptions = ChatOptions & ChatSendOptions;
 
 export type LLMChatResult = {
 	content: string;
@@ -157,8 +183,7 @@ export class LLMProviderError extends Error {
 	}
 }
 
-
-function createDefaultClient(config: LLMConfig): ChatCompletionClient {
+function createDefaultClient(config: LLMConfig): ChatClient {
 	const client = new OpenRouter({ apiKey: config.apiKey });
 
 	return {
@@ -170,23 +195,24 @@ function createDefaultClient(config: LLMConfig): ChatCompletionClient {
 }
 
 export class LLMProvider {
-	private readonly client: ChatCompletionClient;
+	private readonly client: ChatClient;
 	private readonly config: LLMConfig;
 
-	constructor(config: LLMConfig, client?: ChatCompletionClient) {
+	constructor(config: LLMConfig, client?: ChatClient) {
 		this.config = config;
 		this.client = client ?? createDefaultClient(config);
 	}
 
 	async chat(
 		messages: ChatMessage[],
-		tools: ChatFunctionToolFunction[] = [],
+		tools: ToolSchema[] = [],
 		options?: LLMChatOptions,
 	): Promise<LLMChatResult> {
 		const { signal, ...chatOptions } = options ?? {};
 
 		try {
 			const openRouterMessages = toOpenRouterMessages(messages);
+			const openRouterTools = tools.map(toOpenRouterTool);
 			logger.info("llm.request", {
 				model: this.config.model,
 				messageCount: openRouterMessages.length,
@@ -198,9 +224,10 @@ export class LLMProvider {
 					chatRequest: {
 						model: this.config.model,
 						messages: openRouterMessages,
-						tools: tools.length > 0 ? tools : undefined,
+						tools: openRouterTools.length > 0 ? openRouterTools : undefined,
 						temperature: this.config.temperature,
 						maxCompletionTokens: this.config.maxTokens,
+						reasoningEffort: this.config.reasoningEffort,
 						...chatOptions,
 					},
 				},

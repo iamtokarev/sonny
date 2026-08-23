@@ -4,7 +4,7 @@ import type {
 	PreparedContext,
 	TokenCountRequest,
 } from "../context";
-import type { ChatMessage, ToolCall } from "../domain";
+import type { ChatMessage, ToolCall, ToolSchema } from "../domain";
 import type { TurnContext } from "../events";
 import type { HistoryRecorderSink } from "../history";
 import type { LLMChatResult } from "../llm";
@@ -19,7 +19,7 @@ type ContextController = Pick<ContextManager, "inspect" | "prepare">;
 type ChatModel = {
 	chat(
 		messages: ChatMessage[],
-		tools?: unknown[],
+		tools?: ToolSchema[],
 		options?: { signal?: AbortSignal },
 	): Promise<string | LLMChatResult>;
 };
@@ -208,7 +208,7 @@ export class AgentSession {
 	}
 
 	private async prepareContext(
-		toolSchemas: unknown[],
+		toolSchemas: ToolSchema[],
 		turnContext: TurnContext,
 	): Promise<void> {
 		// Automatic compaction is a best-effort optimization. A transient

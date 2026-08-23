@@ -10,6 +10,13 @@ export type ToolCall = {
 	id: string;
 	name: string;
 	parameters: unknown;
+	rawArguments?: string;
+};
+
+export type ToolSchema = {
+	name: string;
+	description: string;
+	parameters: Record<string, unknown>;
 };
 
 export type SystemMessage = {

@@ -2,7 +2,11 @@ import type { ToolCompletionStatus } from "../domain";
 
 export type JsonSchema = Record<string, unknown>;
 
-export type ToolFailureReason = "denied" | "not_found" | "execution_failed";
+export type ToolFailureReason =
+	| "denied"
+	| "not_found"
+	| "invalid_arguments"
+	| "execution_failed";
 
 export type ToolResult =
 	| {

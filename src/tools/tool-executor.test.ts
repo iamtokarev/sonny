@@ -225,6 +225,49 @@ describe("ToolExecutor", () => {
 		});
 	});
 
+	test("returns error for malformed arguments before hooks run, without executing the tool", async () => {
+		let hookCalled = false;
+		let toolExecuted = false;
+		const events: RuntimeEvent[] = [];
+		eventBus.subscribe((event) => {
+			events.push(event);
+		});
+		const trackedRegistry = new ToolRegistry();
+		trackedRegistry.register(
+			createTestTool("test_tool", async () => {
+				toolExecuted = true;
+				return { ok: true, content: "done" };
+			}),
+		);
+		const executor = new ToolExecutor(trackedRegistry, {
+			preTool: [
+				() => {
+					hookCalled = true;
+					return { action: "allow" };
+				},
+			],
+		});
+
+		const result = await executeTool(executor, {
+			id: "call_test",
+			name: "test_tool",
+			parameters: {},
+			rawArguments: "{not-json",
+		});
+
+		expect(result.ok).toBe(false);
+		expect((result as { reason?: string }).reason).toBe("invalid_arguments");
+		expect(hookCalled).toBe(false);
+		expect(toolExecuted).toBe(false);
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			type: "tool.completed",
+			toolCallId: "call_test",
+			toolName: "test_tool",
+			status: "failed",
+		});
+	});
+
 	test("returns transformed error when tool throws", async () => {
 		const events: RuntimeEvent[] = [];
 		eventBus.subscribe((event) => {

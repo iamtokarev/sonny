@@ -39,20 +39,17 @@ describe("ToolRegistry", () => {
 		);
 	});
 
-	test("returns OpenAI-compatible tool schemas", () => {
+	test("returns vendor-neutral tool schemas", () => {
 		const tool = createTestTool("readFile");
 		registry.register(tool);
 
 		expect(registry.getSchemas()).toEqual([
 			{
-				type: "function",
-				function: {
-					name: "readFile",
-					description: "A test tool",
-					parameters: {
-						type: "object",
-						properties: {},
-					},
+				name: "readFile",
+				description: "A test tool",
+				parameters: {
+					type: "object",
+					properties: {},
 				},
 			},
 		]);
