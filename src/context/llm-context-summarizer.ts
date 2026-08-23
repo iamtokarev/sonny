@@ -5,7 +5,6 @@ import type {
 	ContextSummaryInput,
 } from "./context-summarizer";
 
-
 type SummaryChatModel = {
 	chat(
 		messages: ChatMessage[],
