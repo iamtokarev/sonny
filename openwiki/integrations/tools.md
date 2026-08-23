@@ -37,12 +37,13 @@ Tool calls pass through this sequence, with events published at each boundary:
 1. The model emits a tool call.
 2. `ToolExecutor.execute(call, turnContext)` publishes `tool.started` (with tool name, parameters, and a preview string).
 3. Pre-tool hooks inspect and possibly modify the request.
-4. Policy hooks may deny unsafe calls or request user approval.
-5. The user-facing approval hook can accept or reject the action.
-6. The tool executes.
-7. Post-tool hooks, failure hooks, and result-transform hooks run.
-8. `tool.completed` is published (with status, content, and `durationMs`) via `publishRuntimeEvent()`.
-9. The result is emitted to the model and surfaced in the UI.
+4. If `call.rawArguments` is set (meaning the model's arguments were not valid JSON), the executor short-circuits with an `invalid_arguments` failure, publishes `tool.completed`, and returns without executing the tool.
+5. Policy hooks may deny unsafe calls or request user approval.
+6. The user-facing approval hook can accept or reject the action.
+7. The tool executes.
+8. Post-tool hooks, failure hooks, and result-transform hooks run.
+9. `tool.completed` is published (with status, content, and `durationMs`) via `publishRuntimeEvent()`.
+10. The result is emitted to the model and surfaced in the UI.
 
 Events are published through the `RuntimeEventPublisher` carried by `TurnContext`, which is created per-turn by `AgentRuntime`. The `ToolCompletedEvent.status` field uses `ToolCompletionStatus` — the same type stored on `ToolMessage` in session state — ensuring consistency between runtime events, UI display, and persisted history. The [architecture overview](../architecture/overview.md) shows how `TurnContext` flows from `AgentRuntime` through `AgentSession` to `ToolExecutor`.
 

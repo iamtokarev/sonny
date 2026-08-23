@@ -42,7 +42,7 @@ The parser can override:
 
 `.github/workflows/ci.yml` verifies pull requests and pushes to `main` with a frozen Bun install, `bun run check`, `bun run typecheck`, and `bun run test`. See the [testing guide](../testing.md) for focused regression paths.
 
-The repository also contains a scheduled/manual OpenWiki update workflow at `.github/workflows/openwiki-update.yml`. It installs the OpenWiki CLI, runs `openwiki code --update --print`, and opens a pull request covering `openwiki/`, `AGENTS.md`, `CLAUDE.md`, and the workflow file. Generated pages stay under `openwiki/`; keep runtime logs and workspace history out of git as required by `AGENTS.md`.
+Generated pages stay under `openwiki/`; keep runtime logs and workspace history out of git as required by `AGENTS.md`.
 
 ## Source anchors
 
@@ -50,4 +50,3 @@ The repository also contains a scheduled/manual OpenWiki update workflow at `.gi
 - `src/config/parse-config.ts`
 - `src/config/schemas/index.ts`
 - `src/cli/main.ts`
-- `.github/workflows/openwiki-update.yml`

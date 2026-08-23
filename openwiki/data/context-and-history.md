@@ -39,6 +39,17 @@ The runtime reads the persisted JSONL file back into memory when resuming or con
 
 `src/context/context-manager.ts` estimates the full request (system prompt, messages, and tool schemas), compacts oversized unprotected tool results first, then summarizes the safely isolated middle of the conversation if the session still exceeds its threshold. The default configuration is a 200,000-token window at 75% (150,000 tokens), with four protected head messages and six protected tail messages.
 
+### Token estimation and anchor calibration
+
+The token counter (`src/context/token-counter.ts`) uses a rough 4-chars-per-token heuristic (`RoughTokenCounter`) rather than an exact tokenizer. This avoids the runtime cost of tokenizing every message and is sufficient for threshold-triggered compaction.
+
+Because the rough estimate can diverge from the provider's real token count, the context manager calibrates it with actual usage data returned by the LLM provider (`TokenUsage.promptTokens`). After each model response, `AgentSession` calls `contextManager.recordUsage(response.usage)`, which stores the provider's prompt-token count alongside the rough estimate at that point (`roughAtAnchor`). Subsequent `inspect()` and `prepare()` calls return `effectiveTokens(rough)`:
+
+- If no usage has been recorded yet, the rough estimate is used directly.
+- Once anchored, the manager returns the real `anchorPromptTokens` as long as the rough estimate hasn't drifted beyond a tolerance (at least 4,096 tokens or 5% of the threshold, whichever is larger).
+- If the rough estimate drifts beyond tolerance (meaning the conversation has grown significantly since the anchor), the manager falls back to the rough estimate to avoid under-reporting.
+- After a successful compaction that changes messages, the anchor is cleared (`anchorPromptTokens = undefined`) so the next LLM response re-establishes it.
+
 The compaction strategy preserves the beginning and end of the conversation and only replaces the middle region when needed. This is important because the opening instructions and the most recent user context are usually the most valuable pieces of state.
 
 ### Compaction events
