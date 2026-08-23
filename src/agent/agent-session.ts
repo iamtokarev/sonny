@@ -7,6 +7,7 @@ import type {
 import type { ChatMessage, ToolCall } from "../domain";
 import type { TurnContext } from "../events";
 import type { HistoryRecorderSink } from "../history";
+import type { LLMChatResult } from "../llm";
 import { getToolCompletionStatus } from "../tools/tool";
 import type { ToolExecutor } from "../tools/tool-executor";
 import type { ToolRegistry } from "../tools/tool-registry";
@@ -15,18 +16,12 @@ import type { SessionState } from "./session-state";
 
 type ContextController = Pick<ContextManager, "inspect" | "prepare">;
 
-type ChatModelResult = {
-	content: string;
-	toolCalls: ToolCall[];
-	stopReason: "stop" | "tool_calls" | "length" | "content_filter";
-};
-
 type ChatModel = {
 	chat(
 		messages: ChatMessage[],
 		tools?: unknown[],
 		options?: { signal?: AbortSignal },
-	): Promise<string | ChatModelResult>;
+	): Promise<string | LLMChatResult>;
 };
 
 const maxToolIterations = 10;

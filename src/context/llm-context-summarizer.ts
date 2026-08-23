@@ -1,15 +1,17 @@
 import type { ChatMessage, ToolCall } from "../domain";
+import type { LLMChatOptions, LLMChatResult } from "../llm";
 import type {
 	ContextSummarizer,
 	ContextSummaryInput,
 } from "./context-summarizer";
 
+
 type SummaryChatModel = {
 	chat(
 		messages: ChatMessage[],
 		tools?: [],
-		options?: { max_completion_tokens?: number },
-	): Promise<{ content: string }>;
+		options?: Pick<LLMChatOptions, "maxCompletionTokens">,
+	): Promise<Pick<LLMChatResult, "content">>;
 };
 
 export class LlmContextSummarizer implements ContextSummarizer {
@@ -20,7 +22,7 @@ export class LlmContextSummarizer implements ContextSummarizer {
 		const response = await this.llm.chat(
 			[{ role: "user", content: prompt }],
 			[],
-			{ max_completion_tokens: input.maxSummaryTokens },
+			{ maxCompletionTokens: input.maxSummaryTokens },
 		);
 
 		return response.content;

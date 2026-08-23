@@ -1,9 +1,7 @@
 llm:
-  provider: openai
-  model: gpt-5.4-mini
-  apiBase: null
+  model: openai/gpt-5.6-luna
   temperature: 0.7
-  maxTokens: 2048
+  maxTokens: 32000
 
 defaultAgent: sonny
 agentsPath: agents

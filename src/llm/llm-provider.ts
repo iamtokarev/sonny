@@ -1,44 +1,45 @@
-import OpenAI from "openai";
+import { OpenRouter } from "@openrouter/sdk";
 import type {
-	ChatCompletion,
-	ChatCompletionCreateParamsNonStreaming,
-	ChatCompletionMessageParam,
-	ChatCompletionMessageToolCall,
-	ChatCompletionTool,
-} from "openai/resources/chat/completions";
+	ChatContentItems,
+	ChatFunctionToolFunction,
+	ChatMessages,
+	ChatRequestReasoningEffort,
+	ChatResult,
+	ChatToolCall,
+} from "@openrouter/sdk/models";
 import type { LLMConfig } from "../config";
 import type { ChatMessage, ToolCall } from "../domain";
 import { createLogger } from "../utils/logger";
 
-type ChatOptions = Partial<
-	Pick<
-		ChatCompletionCreateParamsNonStreaming,
-		"temperature" | "max_completion_tokens" | "reasoning_effort"
-	>
->;
+type ChatOptions = Partial<{
+	temperature: number;
+	maxCompletionTokens: number;
+	reasoningEffort: ChatRequestReasoningEffort;
+}>;
 
-export type ChatCompletionCreateParams = ChatCompletionCreateParamsNonStreaming;
+export type ChatCompletionCreateParams = {
+	model: string;
+	messages: ChatMessages[];
+	tools?: ChatFunctionToolFunction[];
+} & ChatOptions;
 
-/** Per-request options, separate from the body so the signal is not sent. */
 export type ChatCompletionRequestOptions = {
 	signal?: AbortSignal;
 };
 
 export type ChatCompletionClient = {
 	chat: {
-		completions: {
-			create: (
-				params: ChatCompletionCreateParams,
-				options?: ChatCompletionRequestOptions,
-			) => PromiseLike<ChatCompletion>;
-		};
+		send: (
+			request: { chatRequest: ChatCompletionCreateParams },
+			options?: ChatCompletionRequestOptions,
+		) => PromiseLike<ChatResult>;
 	};
 };
 
 export type LLMStopReason = "stop" | "tool_calls" | "length" | "content_filter";
 const logger = createLogger("providers.llm-provider");
 
-function toOpenAIMessage(message: ChatMessage): ChatCompletionMessageParam {
+function toOpenRouterMessage(message: ChatMessage): ChatMessages {
 	switch (message.role) {
 		case "system":
 		case "user":
@@ -58,7 +59,7 @@ function toOpenAIMessage(message: ChatMessage): ChatCompletionMessageParam {
 			return {
 				role: "assistant",
 				content: message.content || null,
-				tool_calls: message.toolCalls?.map((toolCall) => ({
+				toolCalls: message.toolCalls?.map((toolCall) => ({
 					id: toolCall.id,
 					type: "function",
 					function: {
@@ -72,15 +73,13 @@ function toOpenAIMessage(message: ChatMessage): ChatCompletionMessageParam {
 			return {
 				role: "tool",
 				content: message.content,
-				tool_call_id: message.toolCallId,
+				toolCallId: message.toolCallId,
 			};
 	}
 }
 
-function toOpenAIMessages(
-	messages: ChatMessage[],
-): ChatCompletionMessageParam[] {
-	return messages.map(toOpenAIMessage);
+function toOpenRouterMessages(messages: ChatMessage[]): ChatMessages[] {
+	return messages.map(toOpenRouterMessage);
 }
 
 function parseToolArguments(argumentsJson: string): unknown {
@@ -91,30 +90,56 @@ function parseToolArguments(argumentsJson: string): unknown {
 	}
 }
 
-function toSonnyToolCall(toolCall: ChatCompletionMessageToolCall): ToolCall {
-	if (toolCall.type === "function") {
-		return {
-			id: toolCall.id,
-			name: toolCall.function.name,
-			parameters: parseToolArguments(toolCall.function.arguments),
-		};
-	}
-
+function toSonnyToolCall(toolCall: ChatToolCall): ToolCall {
 	return {
 		id: toolCall.id,
-		name: toolCall.custom.name,
-		parameters: { input: toolCall.custom.input },
+		name: toolCall.function.name,
+		parameters: parseToolArguments(toolCall.function.arguments),
 	};
 }
 
-function normalizeStopReason(
-	finishReason: ChatCompletion.Choice["finish_reason"] | undefined,
-): LLMStopReason {
-	if (finishReason === "function_call") {
-		return "tool_calls";
+
+function extractTextContent(
+	content: string | ChatContentItems[] | null | undefined,
+): string {
+	if (content === null || content === undefined) {
+		return "";
 	}
 
-	return finishReason ?? "stop";
+	if (typeof content === "string") {
+		return content;
+	}
+
+	return content
+		.filter(
+			(part): part is Extract<ChatContentItems, { type: "text" }> =>
+				part.type === "text",
+		)
+		.map((part) => part.text)
+		.join("");
+}
+
+const knownStopReasons: readonly LLMStopReason[] = [
+	"stop",
+	"tool_calls",
+	"length",
+	"content_filter",
+];
+
+function normalizeStopReason(
+	finishReason: ChatResult["choices"][number]["finishReason"] | undefined,
+): LLMStopReason {
+	if (
+		finishReason !== undefined &&
+		finishReason !== null &&
+		(knownStopReasons as readonly string[]).includes(finishReason)
+	) {
+		return finishReason as LLMStopReason;
+	}
+
+	// Covers the "error" finish reason and any value the SDK doesn't
+	// recognize yet — both fold to "stop" rather than growing LLMStopReason.
+	return "stop";
 }
 
 export type LLMChatOptions = ChatOptions & ChatCompletionRequestOptions;
@@ -132,60 +157,61 @@ export class LLMProviderError extends Error {
 	}
 }
 
+
+function createDefaultClient(config: LLMConfig): ChatCompletionClient {
+	const client = new OpenRouter({ apiKey: config.apiKey });
+
+	return {
+		chat: {
+			send: async (request, options) =>
+				(await client.chat.send(request, options)) as ChatResult,
+		},
+	};
+}
+
 export class LLMProvider {
 	private readonly client: ChatCompletionClient;
 	private readonly config: LLMConfig;
 
 	constructor(config: LLMConfig, client?: ChatCompletionClient) {
 		this.config = config;
-		this.client =
-			client ??
-			(new OpenAI({
-				apiKey: config.apiKey,
-				baseURL: config.apiBase ?? undefined,
-			}) as ChatCompletionClient);
+		this.client = client ?? createDefaultClient(config);
 	}
 
-	/**
-	 * Sends request to OpenAI compatible model
-	 * @param messages - list of messages to sent
-	 * @param options - options to control request settings
-	 * @returns content of the response from the model
-	 */
 	async chat(
 		messages: ChatMessage[],
-		tools: ChatCompletionTool[] = [],
+		tools: ChatFunctionToolFunction[] = [],
 		options?: LLMChatOptions,
 	): Promise<LLMChatResult> {
-		// The signal belongs to the request, not the body — spreading it into the
-		// completion params would send it to the model as an unknown field.
 		const { signal, ...chatOptions } = options ?? {};
 
 		try {
-			const openAIMessages = toOpenAIMessages(messages);
+			const openRouterMessages = toOpenRouterMessages(messages);
 			logger.info("llm.request", {
 				model: this.config.model,
-				messageCount: openAIMessages.length,
+				messageCount: openRouterMessages.length,
 				toolCount: tools.length,
 			});
 
-			const completion = await this.client.chat.completions.create(
+			const result = await this.client.chat.send(
 				{
-					model: this.config.model,
-					messages: openAIMessages,
-					tools: tools.length > 0 ? tools : undefined,
-					temperature: this.config.temperature,
-					max_completion_tokens: this.config.maxTokens,
-					...chatOptions,
+					chatRequest: {
+						model: this.config.model,
+						messages: openRouterMessages,
+						tools: tools.length > 0 ? tools : undefined,
+						temperature: this.config.temperature,
+						maxCompletionTokens: this.config.maxTokens,
+						...chatOptions,
+					},
 				},
 				signal === undefined ? undefined : { signal },
 			);
 
-			const choice = completion.choices[0];
+			const choice = result.choices[0];
 			const message = choice?.message;
-			const toolCalls = message?.tool_calls?.map(toSonnyToolCall) ?? [];
-			const content = message?.content ?? "";
-			const stopReason = normalizeStopReason(choice?.finish_reason);
+			const toolCalls = message?.toolCalls?.map(toSonnyToolCall) ?? [];
+			const content = extractTextContent(message?.content);
+			const stopReason = normalizeStopReason(choice?.finishReason);
 
 			if (!content && toolCalls.length === 0) {
 				throw new LLMProviderError(
@@ -206,8 +232,7 @@ export class LLMProvider {
 				stopReason,
 			};
 		} catch (error) {
-			// A cancelled turn is not a provider failure, and wrapping it would
-			// hide the abort from the caller deciding how to report the turn.
+			// A cancelled turn is not a provider failure
 			if (signal?.aborted === true) {
 				throw error;
 			}

@@ -37,10 +37,8 @@ You are Sonny.
 				summaryMaxTokens: 4000,
 			},
 			llm: {
-				provider: "openai",
 				model: "gpt-test",
 				apiKey: "test-key",
-				apiBase: null,
 				temperature: 0.7,
 				maxTokens: 2048,
 			},

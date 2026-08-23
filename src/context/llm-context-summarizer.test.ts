@@ -5,7 +5,7 @@ import { LlmContextSummarizer } from "./llm-context-summarizer";
 type SummaryCall = {
 	messages: ChatMessage[];
 	tools: [];
-	options: { max_completion_tokens?: number } | undefined;
+	options: { maxCompletionTokens?: number } | undefined;
 };
 
 class FakeSummaryLLM {
@@ -19,7 +19,7 @@ class FakeSummaryLLM {
 	async chat(
 		messages: ChatMessage[],
 		tools: [] = [],
-		options?: { max_completion_tokens?: number },
+		options?: { maxCompletionTokens?: number },
 	): Promise<{ content: string }> {
 		this.calls.push({ messages, tools, options });
 
@@ -45,7 +45,7 @@ describe("LlmContextSummarizer", () => {
 		expect(llm.calls).toHaveLength(1);
 		expect(llm.calls[0]?.tools).toEqual([]);
 		expect(llm.calls[0]?.options).toEqual({
-			max_completion_tokens: 1234,
+			maxCompletionTokens: 1234,
 		});
 		expect(llm.calls[0]?.messages).toHaveLength(1);
 		expect(llm.calls[0]?.messages[0]?.role).toBe("user");

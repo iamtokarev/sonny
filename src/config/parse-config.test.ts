@@ -7,9 +7,7 @@ describe("parseConfig", () => {
 		const config = parseConfig(
 			{
 				llm: {
-					provider: "openai",
 					model: "gpt-4.1",
-					apiBase: null,
 					temperature: 0.7,
 					maxTokens: 2048,
 				},
@@ -21,7 +19,6 @@ describe("parseConfig", () => {
 
 		expect(config.llm.apiKey).toBe("test-key");
 		expect(config.defaultAgent).toBe("sonny");
-		expect(config.llm.provider).toBe("openai");
 		expect(config.workspace).toBe(join(process.cwd(), "workspace"));
 		expect(config.contextCompaction).toEqual({
 			contextWindowTokens: 200_000,
@@ -37,7 +34,6 @@ describe("parseConfig", () => {
 		const config = parseConfig(
 			{
 				llm: {
-					provider: "openai",
 					model: "gpt-4.1",
 					apiKey: "configured-llm-key",
 				},
@@ -54,9 +50,7 @@ describe("parseConfig", () => {
 		const config = parseConfig(
 			{
 				llm: {
-					provider: "openai",
 					model: "gpt-4.1",
-					apiBase: null,
 					temperature: 0.7,
 					maxTokens: 2048,
 				},

@@ -21,13 +21,13 @@
 		"typescript": "^5.9.3"
 	},
 	"dependencies": {
+		"@openrouter/sdk": "^1.2.54",
 		"@tavily/core": "^0.7.6",
 		"commander": "^15.0.0",
 		"dotenv": "^17.4.2",
 		"gpt-tokenizer": "^3.4.0",
 		"gray-matter": "^4.0.3",
 		"ink": "^7.1.0",
-		"openai": "^6.46.0",
 		"react": "^19.2.7",
 		"yaml": "^2.9.0",
 		"zod": "^4.4.3"

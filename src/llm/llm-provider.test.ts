@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import type {
-	ChatCompletion,
-	ChatCompletionMessageToolCall,
-	ChatCompletionTool,
-} from "openai/resources/chat/completions";
+	ChatFunctionToolFunction,
+	ChatResult,
+	ChatToolCall,
+} from "@openrouter/sdk/models";
 import type { LLMConfig } from "../config";
 import type { ChatMessage } from "../domain";
 import {
@@ -14,10 +14,8 @@ import {
 } from "./llm-provider";
 
 const config: LLMConfig = {
-	provider: "openai",
-	model: "gpt-test",
+	model: "openai/gpt-test",
 	apiKey: "test-key",
-	apiBase: null,
 	temperature: 0.7,
 	maxTokens: 2048,
 };
@@ -25,53 +23,54 @@ const config: LLMConfig = {
 const messages: ChatMessage[] = [{ role: "user", content: "Hello" }];
 
 function createFakeClient(
-	create: (params: ChatCompletionCreateParams) => PromiseLike<ChatCompletion>,
+	send: (request: {
+		chatRequest: ChatCompletionCreateParams;
+	}) => PromiseLike<ChatResult>,
 ): ChatCompletionClient {
 	return {
 		chat: {
-			completions: {
-				create,
-			},
+			send,
 		},
 	};
 }
 
-function createCompletion(options: {
+function createChatResult(options: {
 	content: string | null;
-	toolCalls?: ChatCompletionMessageToolCall[];
-	finishReason?: ChatCompletion.Choice["finish_reason"];
-}): ChatCompletion {
+	toolCalls?: ChatToolCall[];
+	finishReason?: ChatResult["choices"][number]["finishReason"];
+}): ChatResult {
 	return {
 		id: "chatcmpl-test",
 		object: "chat.completion",
 		created: 0,
-		model: "gpt-test",
+		model: "openai/gpt-test",
+		systemFingerprint: null,
 		choices: [
 			{
 				index: 0,
-				finish_reason: options.finishReason ?? "stop",
-				logprobs: null,
+				finishReason: options.finishReason ?? "stop",
 				message: {
 					role: "assistant",
 					content: options.content,
-					refusal: null,
-					tool_calls: options.toolCalls,
+					toolCalls: options.toolCalls,
 				},
 			},
 		],
 	};
 }
 
-function createMockCreate(
+function createMockSend(
 	content: string | null,
 	options?: {
-		toolCalls?: ChatCompletionMessageToolCall[];
-		finishReason?: ChatCompletion.Choice["finish_reason"];
+		toolCalls?: ChatToolCall[];
+		finishReason?: ChatResult["choices"][number]["finishReason"];
 	},
 ) {
 	return mock(
-		async (_params: ChatCompletionCreateParams): Promise<ChatCompletion> =>
-			createCompletion({
+		async (_request: {
+			chatRequest: ChatCompletionCreateParams;
+		}): Promise<ChatResult> =>
+			createChatResult({
 				content,
 				toolCalls: options?.toolCalls,
 				finishReason: options?.finishReason,
@@ -81,7 +80,7 @@ function createMockCreate(
 
 function createFunctionToolCall(
 	argumentsJson = '{"path":"README.md"}',
-): ChatCompletionMessageToolCall {
+): ChatToolCall {
 	return {
 		id: "call_test",
 		type: "function",
@@ -93,12 +92,12 @@ function createFunctionToolCall(
 }
 
 describe("LLMProvider", () => {
-	let create: ReturnType<typeof createMockCreate>;
+	let send: ReturnType<typeof createMockSend>;
 	let provider: LLMProvider;
 
 	beforeEach(() => {
-		create = createMockCreate("Hello from the model");
-		provider = new LLMProvider(config, createFakeClient(create));
+		send = createMockSend("Hello from the model");
+		provider = new LLMProvider(config, createFakeClient(send));
 	});
 
 	test("returns assistant content", async () => {
@@ -114,18 +113,20 @@ describe("LLMProvider", () => {
 	test("sends configured request parameters", async () => {
 		await provider.chat(messages, [], { temperature: 0.2 });
 
-		expect(create).toHaveBeenCalledTimes(1);
-		expect(create.mock.calls[0]?.[0]).toEqual({
-			model: "gpt-test",
-			messages: [{ role: "user", content: "Hello" }],
-			tools: undefined,
-			temperature: 0.2,
-			max_completion_tokens: 2048,
+		expect(send).toHaveBeenCalledTimes(1);
+		expect(send.mock.calls[0]?.[0]).toEqual({
+			chatRequest: {
+				model: "openai/gpt-test",
+				messages: [{ role: "user", content: "Hello" }],
+				tools: undefined,
+				temperature: 0.2,
+				maxCompletionTokens: 2048,
+			},
 		});
 	});
 
 	test("sends tool schemas when provided", async () => {
-		const tools: ChatCompletionTool[] = [
+		const tools: ChatFunctionToolFunction[] = [
 			{
 				type: "function",
 				function: {
@@ -141,10 +142,10 @@ describe("LLMProvider", () => {
 
 		await provider.chat(messages, tools);
 
-		expect(create.mock.calls[0]?.[0].tools).toBe(tools);
+		expect(send.mock.calls[0]?.[0].chatRequest.tools).toBe(tools);
 	});
 
-	test("converts Sonny assistant and tool messages to OpenAI messages", async () => {
+	test("converts Sonny assistant and tool messages to OpenRouter messages", async () => {
 		const messages: ChatMessage[] = [
 			{
 				role: "assistant",
@@ -166,11 +167,11 @@ describe("LLMProvider", () => {
 
 		await provider.chat(messages);
 
-		expect(create.mock.calls[0]?.[0].messages).toEqual([
+		expect(send.mock.calls[0]?.[0].chatRequest.messages).toEqual([
 			{
 				role: "assistant",
 				content: null,
-				tool_calls: [
+				toolCalls: [
 					{
 						id: "call_test",
 						type: "function",
@@ -184,7 +185,7 @@ describe("LLMProvider", () => {
 			{
 				role: "tool",
 				content: "file content",
-				tool_call_id: "call_test",
+				toolCallId: "call_test",
 			},
 		]);
 	});
@@ -200,7 +201,7 @@ describe("LLMProvider", () => {
 
 		await provider.chat(messages);
 
-		expect(create.mock.calls[0]?.[0].messages).toEqual([
+		expect(send.mock.calls[0]?.[0].chatRequest.messages).toEqual([
 			{
 				role: "assistant",
 				content: "No tools needed",
@@ -208,12 +209,12 @@ describe("LLMProvider", () => {
 		]);
 	});
 
-	test("converts OpenAI tool calls to Sonny tool calls", async () => {
-		create = createMockCreate(null, {
+	test("converts OpenRouter tool calls to Sonny tool calls", async () => {
+		send = createMockSend(null, {
 			toolCalls: [createFunctionToolCall()],
 			finishReason: "tool_calls",
 		});
-		provider = new LLMProvider(config, createFakeClient(create));
+		provider = new LLMProvider(config, createFakeClient(send));
 
 		const response = await provider.chat(messages);
 
@@ -231,11 +232,11 @@ describe("LLMProvider", () => {
 	});
 
 	test("uses empty parameters when tool call arguments are invalid JSON", async () => {
-		create = createMockCreate(null, {
+		send = createMockSend(null, {
 			toolCalls: [createFunctionToolCall("{not-json")],
 			finishReason: "tool_calls",
 		});
-		provider = new LLMProvider(config, createFakeClient(create));
+		provider = new LLMProvider(config, createFakeClient(send));
 
 		const response = await provider.chat(messages);
 
@@ -249,8 +250,8 @@ describe("LLMProvider", () => {
 	});
 
 	test("throws LLMProviderError when response content is missing", async () => {
-		create = createMockCreate(null);
-		provider = new LLMProvider(config, createFakeClient(create));
+		send = createMockSend(null);
+		provider = new LLMProvider(config, createFakeClient(send));
 
 		await expect(provider.chat(messages)).rejects.toThrow(LLMProviderError);
 		await expect(provider.chat(messages)).rejects.toThrow(
@@ -260,12 +261,14 @@ describe("LLMProvider", () => {
 
 	test("wraps client errors as LLMProviderError", async () => {
 		const cause = new Error("network failed");
-		const create = mock(
-			async (_params: ChatCompletionCreateParams): Promise<ChatCompletion> => {
+		const send = mock(
+			async (_request: {
+				chatRequest: ChatCompletionCreateParams;
+			}): Promise<ChatResult> => {
 				throw cause;
 			},
 		);
-		const provider = new LLMProvider(config, createFakeClient(create));
+		const provider = new LLMProvider(config, createFakeClient(send));
 
 		try {
 			await provider.chat(messages);
@@ -281,17 +284,15 @@ describe("LLMProvider", () => {
 describe("LLMProvider cancellation", () => {
 	test("passes the signal as a request option, not as part of the body", async () => {
 		const abort = new AbortController();
-		let seenParams: ChatCompletionCreateParams | undefined;
+		let seenRequest: { chatRequest: ChatCompletionCreateParams } | undefined;
 		let seenOptions: { signal?: AbortSignal } | undefined;
 		const provider = new LLMProvider(config, {
 			chat: {
-				completions: {
-					async create(params, options) {
-						seenParams = params;
-						seenOptions = options;
+				async send(request, options) {
+					seenRequest = request;
+					seenOptions = options;
 
-						return createCompletion({ content: "Hi" });
-					},
+					return createChatResult({ content: "Hi" });
 				},
 			},
 		});
@@ -299,7 +300,7 @@ describe("LLMProvider cancellation", () => {
 		await provider.chat(messages, [], { signal: abort.signal });
 
 		expect(seenOptions?.signal).toBe(abort.signal);
-		expect(seenParams).not.toHaveProperty("signal");
+		expect(seenRequest?.chatRequest).not.toHaveProperty("signal");
 	});
 
 	test("lets an abort through instead of reporting it as a provider failure", async () => {
@@ -307,11 +308,9 @@ describe("LLMProvider cancellation", () => {
 		const cause = new Error("The operation was aborted.");
 		const provider = new LLMProvider(config, {
 			chat: {
-				completions: {
-					async create() {
-						abort.abort();
-						throw cause;
-					},
+				async send() {
+					abort.abort();
+					throw cause;
 				},
 			},
 		});
