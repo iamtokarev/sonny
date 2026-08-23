@@ -33,6 +33,7 @@ function createChatResult(options: {
 	content: string | null;
 	toolCalls?: ChatToolCall[];
 	finishReason?: ChatResult["choices"][number]["finishReason"];
+	usage?: ChatResult["usage"];
 }): ChatResult {
 	return {
 		id: "chatcmpl-test",
@@ -40,6 +41,7 @@ function createChatResult(options: {
 		created: 0,
 		model: "openai/gpt-test",
 		systemFingerprint: null,
+		usage: options.usage,
 		choices: [
 			{
 				index: 0,
@@ -101,6 +103,32 @@ describe("LLMProvider", () => {
 			toolCalls: [],
 			stopReason: "stop",
 		});
+	});
+
+	test("maps token usage from the response", async () => {
+		provider = new LLMProvider(
+			config,
+			createFakeClient(async () =>
+				createChatResult({
+					content: "Hi",
+					usage: { promptTokens: 120, completionTokens: 30, totalTokens: 150 },
+				}),
+			),
+		);
+
+		const response = await provider.chat(messages);
+
+		expect(response.usage).toEqual({
+			promptTokens: 120,
+			completionTokens: 30,
+			totalTokens: 150,
+		});
+	});
+
+	test("omits usage when the response carries none", async () => {
+		const response = await provider.chat(messages);
+
+		expect(response.usage).toBeUndefined();
 	});
 
 	test("sends configured request parameters", async () => {

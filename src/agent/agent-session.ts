@@ -14,7 +14,10 @@ import type { ToolRegistry } from "../tools/tool-registry";
 import { createLogger } from "../utils/logger";
 import type { SessionState } from "./session-state";
 
-type ContextController = Pick<ContextManager, "inspect" | "prepare">;
+type ContextController = Pick<
+	ContextManager,
+	"inspect" | "prepare" | "recordUsage"
+>;
 
 type ChatModel = {
 	chat(
@@ -107,6 +110,8 @@ export class AgentSession {
 					});
 					return response;
 				}
+
+				this.contextManager?.recordUsage(response.usage);
 
 				logger.info("llm.turn.completed", {
 					iteration,

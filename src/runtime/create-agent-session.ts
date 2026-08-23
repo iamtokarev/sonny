@@ -6,8 +6,8 @@ import { loadAgentDefinition } from "../agents/agents-loader";
 import type { Config } from "../config";
 import {
 	ContextManager,
-	GptTokenizerTokenCounter,
 	LlmContextSummarizer,
+	RoughTokenCounter,
 } from "../context";
 import type { ChatMessage } from "../domain";
 import type { RuntimeEventPublisher } from "../events";
@@ -130,7 +130,7 @@ export async function createAgentSession(
 	const hooks = createDefaultToolHooks(options.approveToolCall);
 	const toolExecutor = new ToolExecutor(tools, hooks);
 	const contextManager = new ContextManager({
-		tokenCounter: new GptTokenizerTokenCounter(),
+		tokenCounter: new RoughTokenCounter(),
 		summarizer: new LlmContextSummarizer(llm),
 		...options.config.contextCompaction,
 	});

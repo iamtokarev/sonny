@@ -469,6 +469,7 @@ describe("AgentSession", () => {
 		];
 		const historyRecorder = new FakeHistoryRecorder();
 		const contextManager = {
+			recordUsage: () => {},
 			inspect: () => ({
 				tokenCount: 100,
 				contextWindowTokens: 200,
@@ -512,6 +513,7 @@ describe("AgentSession", () => {
 		state = new SessionState();
 		const historyRecorder = new FakeHistoryRecorder();
 		const contextManager = {
+			recordUsage: () => {},
 			inspect: () => ({
 				tokenCount: 100,
 				contextWindowTokens: 200,
@@ -545,6 +547,7 @@ describe("AgentSession", () => {
 	test("does not rewrite history when prepared context is unchanged", async () => {
 		const historyRecorder = new FakeHistoryRecorder();
 		const contextManager = {
+			recordUsage: () => {},
 			inspect: () => ({
 				tokenCount: 10,
 				contextWindowTokens: 200,
@@ -586,6 +589,7 @@ describe("AgentSession", () => {
 		tools.register(testTool);
 		const inspectedRequests: unknown[] = [];
 		const contextManager = {
+			recordUsage: () => {},
 			inspect: (request: unknown) => {
 				inspectedRequests.push(request);
 				return {
@@ -638,6 +642,7 @@ describe("AgentSession", () => {
 		const historyRecorder = new FakeHistoryRecorder();
 		const prepareCalls: unknown[] = [];
 		const contextManager = {
+			recordUsage: () => {},
 			inspect: () => ({
 				tokenCount: 100,
 				contextWindowTokens: 200,
@@ -693,6 +698,7 @@ describe("AgentSession", () => {
 			new Error("history failed"),
 		);
 		const contextManager = {
+			recordUsage: () => {},
 			inspect: () => ({
 				tokenCount: 100,
 				contextWindowTokens: 200,

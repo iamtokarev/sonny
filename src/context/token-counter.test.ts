@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { countTokens } from "gpt-tokenizer/model/gpt-4o";
-import type { ChatMessage } from "../domain";
-import {
-	GptTokenizerTokenCounter,
-	type TokenCountRequest,
-} from "./token-counter";
+import type { ChatMessage, ToolSchema } from "../domain";
+import { RoughTokenCounter, type TokenCountRequest } from "./token-counter";
 
 const systemPrompt = "You are Sonny, a local agent.";
 const messages: ChatMessage[] = [
@@ -24,77 +20,114 @@ const messages: ChatMessage[] = [
 	{ role: "assistant", content: "It exports a single constant." },
 ];
 
-/** Independent batch reference: whole-chat framing plus tool-call/metadata. */
-function referenceTokens(request: TokenCountRequest): number {
-	const chat = [
-		{ role: "system" as const, content: request.systemPrompt },
-		...request.messages.map(({ role, content }) => ({ role, content })),
-	];
-	let total = countTokens(chat);
+describe("RoughTokenCounter", () => {
+	test("never estimates non-empty content as zero tokens", () => {
+		const counter = new RoughTokenCounter();
 
-	for (const message of request.messages) {
-		if (message.role === "assistant" && message.toolCalls?.length) {
-			total += countTokens(
-				JSON.stringify(
-					message.toolCalls.map((toolCall) => ({
-						id: toolCall.id,
-						type: "function",
-						function: {
-							name: toolCall.name,
-							arguments: JSON.stringify(toolCall.parameters),
-						},
-					})),
-				),
-			);
-		}
-		if (message.role === "tool") {
-			total += countTokens(message.toolCallId);
-		}
-	}
+		expect(
+			counter.countRequestTokens({ systemPrompt: "hi", messages: [] }),
+		).toBeGreaterThan(0);
+	});
 
-	if (request.tools?.length) {
-		total += countTokens(JSON.stringify(request.tools));
-	}
+	test("counts an empty conversation as zero", () => {
+		const counter = new RoughTokenCounter();
 
-	return total;
-}
-
-describe("GptTokenizerTokenCounter", () => {
-	test("matches the exact batch token count", () => {
-		const request: TokenCountRequest = {
-			systemPrompt,
-			messages,
-			tools: [{ name: "readFile" }],
-		};
-
-		expect(new GptTokenizerTokenCounter().countRequestTokens(request)).toBe(
-			referenceTokens(request),
+		expect(counter.countRequestTokens({ systemPrompt: "", messages: [] })).toBe(
+			0,
 		);
 	});
 
-	test("incremental counting is independent of call history", () => {
-		const counter = new GptTokenizerTokenCounter();
+	test("grows monotonically as messages are added", () => {
+		const counter = new RoughTokenCounter();
 
-		// Warm the cache with a prefix, then extend the conversation.
-		counter.countRequestTokens({
+		const short = counter.countRequestTokens({
 			systemPrompt,
 			messages: messages.slice(0, 2),
 		});
-		const incremental = counter.countRequestTokens({ systemPrompt, messages });
+		const full = counter.countRequestTokens({ systemPrompt, messages });
 
-		const fresh = new GptTokenizerTokenCounter().countRequestTokens({
+		expect(full).toBeGreaterThan(short);
+	});
+
+	test("is deterministic for the same request", () => {
+		const counter = new RoughTokenCounter();
+		const request: TokenCountRequest = { systemPrompt, messages };
+
+		expect(counter.countRequestTokens(request)).toBe(
+			counter.countRequestTokens(request),
+		);
+	});
+
+	test("counts tool schemas", () => {
+		const counter = new RoughTokenCounter();
+		const tools: ToolSchema[] = [
+			{
+				name: "readFile",
+				description: "Reads a file",
+				parameters: { type: "object", properties: {} },
+			},
+		];
+
+		const withoutTools = counter.countRequestTokens({
 			systemPrompt,
 			messages,
 		});
+		const withTools = counter.countRequestTokens({
+			systemPrompt,
+			messages,
+			tools,
+		});
 
-		expect(incremental).toBe(fresh);
-		expect(incremental).toBe(referenceTokens({ systemPrompt, messages }));
+		expect(withTools).toBeGreaterThan(withoutTools);
 	});
 
-	test("counts an empty conversation", () => {
-		const request: TokenCountRequest = { systemPrompt: "", messages: [] };
-		expect(new GptTokenizerTokenCounter().countRequestTokens(request)).toBe(
-			referenceTokens(request),
-		);
+	test("counts tool calls and tool call ids on assistant/tool messages", () => {
+		const counter = new RoughTokenCounter();
+
+		const withoutToolCalls = counter.countRequestTokens({
+			systemPrompt,
+			messages: [{ role: "assistant", content: "Reading the file now." }],
+		});
+		const withToolCalls = counter.countRequestTokens({
+			systemPrompt,
+			messages: messages.slice(0, 3),
+		});
+
+		expect(withToolCalls).toBeGreaterThan(withoutToolCalls);
+	});
+
+	test("counts raw arguments over serialized parameters when present", () => {
+		const counter = new RoughTokenCounter();
+		const withParameters = counter.countRequestTokens({
+			systemPrompt,
+			messages: [
+				{
+					role: "assistant",
+					content: "",
+					toolCalls: [
+						{ id: "call-1", name: "readFile", parameters: { path: "x" } },
+					],
+				},
+			],
+		});
+		const withRawArguments = counter.countRequestTokens({
+			systemPrompt,
+			messages: [
+				{
+					role: "assistant",
+					content: "",
+					toolCalls: [
+						{
+							id: "call-1",
+							name: "readFile",
+							parameters: {},
+							rawArguments: "{not-json".repeat(20),
+						},
+					],
+				},
+			],
+		});
+
+		expect(withRawArguments).not.toBe(withParameters);
 	});
 });

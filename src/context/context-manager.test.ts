@@ -650,3 +650,102 @@ describe("compaction reporting", () => {
 		]);
 	});
 });
+
+describe("anchor reconciliation", () => {
+	test("uses the rough estimate before any usage is recorded", () => {
+		const manager = createContextManager([500]);
+
+		expect(
+			manager.inspect({ systemPrompt: "system", messages: [] }).tokenCount,
+		).toBe(500);
+	});
+
+	test("prefers the real prompt_tokens once recorded, within tolerance", () => {
+		const manager = createContextManager([1000, 1100]);
+		manager.inspect({ systemPrompt: "system", messages: [] });
+		manager.recordUsage({
+			promptTokens: 950,
+			completionTokens: 10,
+			totalTokens: 960,
+		});
+
+		expect(
+			manager.inspect({ systemPrompt: "system", messages: [] }).tokenCount,
+		).toBe(950);
+	});
+
+	test("falls back to the rough estimate once drift exceeds tolerance", () => {
+		const manager = createContextManager([1000, 6000]);
+		manager.inspect({ systemPrompt: "system", messages: [] });
+		manager.recordUsage({
+			promptTokens: 950,
+			completionTokens: 10,
+			totalTokens: 960,
+		});
+
+		expect(
+			manager.inspect({ systemPrompt: "system", messages: [] }).tokenCount,
+		).toBe(6000);
+	});
+
+	test("an over-threshold anchor forces compaction even when fresh rough is under threshold", async () => {
+		const messages: ChatMessage[] = [
+			{ role: "user", content: "head" },
+			toolMessage("abcdefghijklmnopqrstuvwxyz"),
+			{ role: "assistant", content: "tail" },
+		];
+		const manager = createContextManager([50, 50, 40], null);
+		manager.inspect({ systemPrompt: "system", messages: [] });
+		manager.recordUsage({
+			promptTokens: 90,
+			completionTokens: 10,
+			totalTokens: 100,
+		});
+
+		const result = await manager.prepare({ systemPrompt: "system", messages });
+
+		expect(result.tokenCountBefore).toBe(90);
+		expect(result.changed).toBe(true);
+		expect(result.compactedToolResultCount).toBe(1);
+		expect(result.tokenCountAfter).toBe(40);
+	});
+
+	test("inspect and prepare agree on the effective token count", async () => {
+		const manager = createContextManager([50, 55, 55], null);
+		manager.inspect({ systemPrompt: "system", messages: [] });
+		manager.recordUsage({
+			promptTokens: 50,
+			completionTokens: 0,
+			totalTokens: 50,
+		});
+
+		const inspected = manager.inspect({ systemPrompt: "system", messages: [] });
+		const prepared = await manager.prepare({
+			systemPrompt: "system",
+			messages: [],
+		});
+
+		expect(prepared.tokenCountBefore).toBe(inspected.tokenCount);
+	});
+
+	test("the meter drops after compaction instead of staying pinned to a stale anchor", async () => {
+		const messages: ChatMessage[] = [
+			{ role: "user", content: "head" },
+			toolMessage("abcdefghijklmnopqrstuvwxyz"),
+			{ role: "assistant", content: "tail" },
+		];
+		const manager = createContextManager([50, 50, 40, 20], null);
+		manager.inspect({ systemPrompt: "system", messages: [] });
+		manager.recordUsage({
+			promptTokens: 90,
+			completionTokens: 10,
+			totalTokens: 100,
+		});
+
+		await manager.prepare({ systemPrompt: "system", messages });
+
+		expect(
+			manager.inspect({ systemPrompt: "system", messages: [] }).tokenCount,
+		).toBe(20);
+	});
+});

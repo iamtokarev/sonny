@@ -170,11 +170,30 @@ function normalizeStopReason(
 
 export type LLMChatOptions = ChatOptions & ChatSendOptions;
 
+export type TokenUsage = {
+	promptTokens: number;
+	completionTokens: number;
+	totalTokens: number;
+};
+
 export type LLMChatResult = {
 	content: string;
 	toolCalls: ToolCall[];
 	stopReason: LLMStopReason;
+	usage?: TokenUsage;
 };
+
+function toTokenUsage(usage: ChatResult["usage"]): TokenUsage | undefined {
+	if (usage === undefined) {
+		return undefined;
+	}
+
+	return {
+		promptTokens: usage.promptTokens,
+		completionTokens: usage.completionTokens,
+		totalTokens: usage.totalTokens,
+	};
+}
 
 export class LLMProviderError extends Error {
 	constructor(message: string, options?: { cause?: unknown }) {
@@ -257,6 +276,7 @@ export class LLMProvider {
 				content,
 				toolCalls,
 				stopReason,
+				usage: toTokenUsage(result.usage),
 			};
 		} catch (error) {
 			// A cancelled turn is not a provider failure

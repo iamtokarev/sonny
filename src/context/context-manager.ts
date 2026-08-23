@@ -4,8 +4,12 @@ import {
 	publishRuntimeEvent,
 	type TurnContext,
 } from "../events";
+import type { TokenUsage } from "../llm";
 import type { ContextSummarizer } from "./context-summarizer";
 import type { TokenCounter, TokenCountRequest } from "./token-counter";
+
+const MIN_ANCHOR_DRIFT_TOLERANCE = 4096;
+const ANCHOR_DRIFT_TOLERANCE_RATIO = 0.05;
 
 export const TOOL_OUTPUT_COMPACTION_MARKER = "[Tool output compacted:";
 export const MISSING_TOOL_RESULT_STUB =
@@ -190,15 +194,48 @@ export function sanitizeToolPairs(messages: ChatMessage[]): ChatMessage[] {
 }
 
 export class ContextManager {
+	private lastRoughTokens = 0;
+	private anchorPromptTokens: number | undefined;
+	private roughAtAnchor = 0;
+
 	constructor(private readonly options: ContextManagerOptions) {}
 
 	inspect(request: TokenCountRequest): ContextUsage {
+		const rough = this.options.tokenCounter.countRequestTokens(request);
+		this.lastRoughTokens = rough;
+
 		return {
-			tokenCount: this.options.tokenCounter.countRequestTokens(request),
+			tokenCount: this.effectiveTokens(rough),
 			contextWindowTokens: this.options.contextWindowTokens,
 			thresholdTokens: this.getThresholdTokens(),
 			thresholdRatio: this.options.thresholdRatio,
 		};
+	}
+
+	recordUsage(usage?: TokenUsage): void {
+		if (usage === undefined) {
+			return;
+		}
+
+		this.anchorPromptTokens = usage.promptTokens;
+		this.roughAtAnchor = this.lastRoughTokens;
+	}
+
+	private effectiveTokens(rough: number): number {
+		if (this.anchorPromptTokens === undefined) {
+			return rough;
+		}
+
+		const tolerance = Math.max(
+			MIN_ANCHOR_DRIFT_TOLERANCE,
+			this.getThresholdTokens() * ANCHOR_DRIFT_TOLERANCE_RATIO,
+		);
+
+		if (rough - this.roughAtAnchor > tolerance) {
+			return rough;
+		}
+
+		return this.anchorPromptTokens;
 	}
 
 	async prepare(
@@ -206,8 +243,9 @@ export class ContextManager {
 		options: PrepareContextOptions = {},
 	): Promise<PreparedContext> {
 		const thresholdTokens = this.getThresholdTokens();
-		const tokenCountBefore =
-			this.options.tokenCounter.countRequestTokens(request);
+		const rough = this.options.tokenCounter.countRequestTokens(request);
+		this.lastRoughTokens = rough;
+		const tokenCountBefore = this.effectiveTokens(rough);
 		const forced = options.forceSummary === true;
 
 		if (!forced && tokenCountBefore < thresholdTokens) {
@@ -245,6 +283,10 @@ export class ContextManager {
 				tokenCountBefore,
 				thresholdTokens,
 			);
+
+			if (prepared.changed) {
+				this.anchorPromptTokens = undefined;
+			}
 
 			this.reportCompacted(turnContext, prepared, startedAt);
 
