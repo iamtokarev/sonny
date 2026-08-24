@@ -1,5 +1,6 @@
 import type { ContextUsage, PreparedContext } from "../context";
 import type { HistorySession } from "../history";
+import type { RuntimeConfigurationResult } from "../runtime";
 import type { Skill } from "../skills/skill";
 
 export interface SlashCommandContext {
@@ -8,6 +9,7 @@ export interface SlashCommandContext {
 	getMessageCount(): number;
 	getContextUsage(): ContextUsage;
 	compactContext(): Promise<PreparedContext>;
+	reloadConfiguration(): Promise<RuntimeConfigurationResult>;
 }
 
 export interface SlashCommand {

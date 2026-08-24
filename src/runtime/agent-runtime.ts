@@ -7,6 +7,10 @@ import {
 	type RuntimeSource,
 	type TurnContext,
 } from "../events";
+import type {
+	ConfigurableAgentRuntimeSession,
+	RuntimeConfigurationResult,
+} from "./reloadable-agent-session";
 
 export interface AgentTurnSession {
 	chat(message: string, turnContext: TurnContext): Promise<string>;
@@ -32,7 +36,7 @@ export interface AgentTurnResult {
 
 export interface AgentRuntimeOptions {
 	readonly sessionId: string;
-	readonly session: AgentRuntimeSession;
+	readonly session: ConfigurableAgentRuntimeSession;
 	readonly events: RuntimeEventPublisher;
 }
 
@@ -59,11 +63,27 @@ export class AgentRuntime {
 	 * that says who asked for it.
 	 */
 	compactContext(): Promise<PreparedContext> {
-		return this.enqueue(() =>
-			this.options.session.compactContext(
-				this.createTurnContext({ kind: "system", name: "compact" }),
-			),
-		);
+		return this.enqueue(async () => {
+			const turnContext = this.createTurnContext({
+				kind: "system",
+				name: "compact",
+			});
+
+			await this.refreshConfiguration(false, turnContext);
+			return this.options.session.compactContext(turnContext);
+		});
+	}
+
+	reloadConfiguration(
+		options: { readonly force?: boolean; readonly source?: RuntimeSource } = {},
+	): Promise<RuntimeConfigurationResult> {
+		return this.enqueue(() => {
+			const turnContext = this.createTurnContext(
+				options.source ?? { kind: "system", name: "config-poll" },
+			);
+
+			return this.refreshConfiguration(options.force ?? false, turnContext);
+		});
 	}
 
 	private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -99,6 +119,7 @@ export class AgentRuntime {
 			inputLength: input.content.length,
 		});
 		const startedAt = performance.now();
+		await this.refreshConfiguration(false, turnContext);
 
 		try {
 			const content = await this.options.session.chat(
@@ -144,5 +165,39 @@ export class AgentRuntime {
 
 			throw error;
 		}
+	}
+
+	private async refreshConfiguration(
+		force: boolean,
+		turnContext: TurnContext,
+	): Promise<RuntimeConfigurationResult> {
+		const result = await this.options.session.refreshConfiguration({ force });
+
+		if (result.status === "reloaded") {
+			publishRuntimeEvent(this.options.events, {
+				...createEventMetadata(turnContext),
+				type: "config.reloaded",
+				revision: result.revision,
+				changedSections: result.changedSections,
+				runtimeRebuilt: result.runtimeRebuilt,
+				model: result.info.model,
+				toolNames: result.info.toolNames,
+			});
+		}
+
+		if (result.status === "rejected") {
+			publishRuntimeEvent(this.options.events, {
+				...createEventMetadata(turnContext),
+				type: "config.reload.failed",
+				retainedRevision: result.retainedRevision,
+				phase: result.phase,
+				error: {
+					name: result.error.name,
+					message: result.error.message,
+				},
+			});
+		}
+
+		return result;
 	}
 }

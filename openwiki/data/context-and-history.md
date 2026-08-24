@@ -39,6 +39,8 @@ The runtime reads the persisted JSONL file back into memory when resuming or con
 
 `src/context/context-manager.ts` estimates the full request (system prompt, messages, and tool schemas), compacts oversized unprotected tool results first, then summarizes the safely isolated middle of the conversation if the session still exceeds its threshold. The default configuration is a 200,000-token window at 75% (150,000 tokens), with four protected head messages and six protected tail messages.
 
+The context manager is constructed inside the runtime's `AgentSessionBuilder` factory (`src/runtime/create-agent-session.ts`) from the active `contextCompaction` config. When a [config hot-reload](../operations/configuration.md) changes `contextCompaction`, `ReloadableAgentSession` rebuilds the factory output, so the new thresholds and limits apply to the next `prepare()` call on the same session; an unchanged runtime config signature leaves the existing manager in place.
+
 ### Token estimation and anchor calibration
 
 The token counter (`src/context/token-counter.ts`) uses a rough 4-chars-per-token heuristic (`RoughTokenCounter`) rather than an exact tokenizer. This avoids the runtime cost of tokenizing every message and is sufficient for threshold-triggered compaction.

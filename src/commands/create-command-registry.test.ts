@@ -38,6 +38,11 @@ function createContext(): SlashCommandContext {
 			compactedToolResultCount: 0,
 			summaryCompactedMessageCount: 8,
 		}),
+		reloadConfiguration: async () => ({
+			status: "unchanged",
+			revision: 1,
+			info: { model: "openai/model-a", toolNames: [] },
+		}),
 	};
 }
 
@@ -54,6 +59,7 @@ describe("createDefaultCommandRegistry", () => {
 					"/help (/h) - Show available commands.",
 					"/context - Show current context usage.",
 					"/compact - Compact conversation context manually.",
+					"/reload - Reload configuration files.",
 					"/skills [query] - List loaded skills.",
 					"/session - Show current session information.",
 				].join("\n"),

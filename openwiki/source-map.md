@@ -12,17 +12,19 @@ This page is a navigation aid for the code paths that matter most in the first-p
 
 ## Runtime and CLI
 
-- `src/cli/main.ts` — command-line entrypoint, creates event bus, starts chat
-- `src/cli/chat-loop.tsx` — interactive Ink UI, event subscription, command handling
-- `src/runtime/create-agent-session.ts` — runtime composition root
-- `src/runtime/agent-runtime.ts` — turn serialization and turn lifecycle events
+- `src/cli/main.ts` — command-line entrypoint; opens `ConfigStore`, then starts the `chat` command
+- `src/cli/chat-loop.tsx` — interactive Ink UI, event subscription, command handling, 5-second config-poll interval
+- `src/runtime/create-agent-session.ts` — runtime composition root; defines the `AgentSessionBuilder` factory and wraps it in `ReloadableAgentSession`
+- `src/runtime/agent-runtime.ts` — turn serialization, turn lifecycle events, and pre-turn/pre-compact config refresh
+- `src/runtime/reloadable-agent-session.ts` — hot-reload wrapper implementing `ConfigurableAgentRuntimeSession`; advances snapshots or rebuilds the live runtime
+- `src/runtime/runtime-config-signature.ts` — SHA-256 signature over runtime-affecting config fields (decides whether a reload rebuilds)
 - `src/agent/agent-session.ts` — conversation engine
 - `src/agent/session-state.ts` — mutable message state
 - `src/domain/message.ts` — message, tool-call, and `ToolCompletionStatus` types
 
 ## Event system
 
-- `src/events/runtime-event.ts` — event catalog (`RuntimeEvent` discriminated union, including `turn.cancelled`, `context.compaction.started`, `context.compaction.completed`)
+- `src/events/runtime-event.ts` — event catalog (`RuntimeEvent` discriminated union, including `turn.cancelled`, `context.compaction.started`, `context.compaction.completed`, `config.reloaded`, `config.reload.failed`)
 - `src/events/event-bus.ts` — `RuntimeEventBus` and `RuntimeEventPublisher` interfaces
 - `src/events/in-memory-event-bus.ts` — synchronous in-process bus implementation
 - `src/events/turn-context.ts` — `TurnContext` (with optional `AbortSignal`) and `RuntimeSource` types
@@ -81,9 +83,13 @@ This page is a navigation aid for the code paths that matter most in the first-p
 
 ## Configuration and LLM
 
-- `src/config/load-config.ts` — reads YAML config and env overrides
+- `src/config/config-store.ts` — `ConfigStore` with revisioned frozen snapshots, source fingerprinting, and serialized refresh
+- `src/config/config-diff.ts` — `diffConfigSections()` producing human-meaningful changed-section labels
+- `src/config/config-error.ts` — `ConfigReloadError` and `toSafeConfigError()` (never exposes rejected secret values)
+- `src/config/load-config.ts` — reads YAML config and a dotenv file, merging env overrides
 - `src/config/parse-config.ts` — schema validation
 - `src/config/schemas/*` — config schemas and defaults
+- `src/config/index.ts` — barrel exports including `DEFAULT_CONFIG_PATH` and `DEFAULT_ENV_PATH`
 - `src/llm/llm-provider.ts` — model provider abstraction
 
 ## Web integration
@@ -94,7 +100,8 @@ This page is a navigation aid for the code paths that matter most in the first-p
 
 ## What to read first when changing something
 
-- If the change affects user input or slash commands, start with `src/cli/chat-loop.tsx`, `src/ui/key-router.ts`, and `src/commands/*`.
+- If the change affects user input or slash commands, start with `src/cli/chat-loop.tsx`, `src/ui/key-router.ts`, `src/commands/*` (including `src/commands/builtin/reload-command.ts` for the `/reload` command).
+- If the change affects config hot reload or the runtime config signature, start with `src/config/config-store.ts`, `src/runtime/reloadable-agent-session.ts`, `src/runtime/runtime-config-signature.ts`, and `src/runtime/agent-runtime.ts` (see [configuration and operations](operations/configuration.md)).
 - If the change affects event types or the event bus, start with `src/events/*` and `src/runtime/agent-runtime.ts`.
 - If the change affects TUI rendering, theming, or component layout, start with `src/ui/theme.ts`, `src/ui/components/*`, and `src/ui/transcript.ts`.
 - If the change affects capabilities or safety, start with `src/tools/*`.

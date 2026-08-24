@@ -24,15 +24,15 @@ CI at `.github/workflows/ci.yml` runs `bun install --frozen-lockfile`, then `bun
 
 When changing the runtime, focus on the following areas first:
 
-- `src/runtime/*` — session assembly, `AgentRuntime` turn serialization, dependency wiring, and `turn.cancelled` event reporting
-- `src/events/*` — event bus dispatch, `publishRuntimeEvent()` safety, event type coverage including `context.compaction.started` / `context.compaction.completed`
+- `src/runtime/*` — session assembly, `AgentRuntime` turn serialization, dependency wiring, `turn.cancelled` event reporting, and pre-turn/pre-compact config refresh via `ReloadableAgentSession`
+- `src/config/*` — `ConfigStore` snapshot revisioning and fingerprint detection, `diffConfigSections()` labels, `loadConfig` env precedence, and `ConfigReloadError` safety (never expose rejected secrets)
+- `src/events/*` — event bus dispatch, `publishRuntimeEvent()` safety, event type coverage including `context.compaction.started` / `context.compaction.completed` and `config.reloaded` / `config.reload.failed`
 - `src/tools/*` — approval, policy, and execution behavior including event emission
 - `src/context/*` — compaction, token counting, and compaction event publishing through `TurnContext`
 - `src/history/*` — resume/continue and JSONL persistence
-- `src/cli/*` and `src/commands/*` — command handling, TUI flow, event subscription, turn cancellation via `AbortSignal`, and transcript restoration
+- `src/cli/*` and `src/commands/*` — command handling, TUI flow, event subscription, turn cancellation via `AbortSignal`, transcript restoration, and the 5-second config-poll guard (`createConfigPollTick`)
 - `src/ui/*` — pure-logic modules (theme, markdown, text-input, key-router, tool-row, transcript, context-meter), component rendering via `src/ui/test-support/ink-harness.tsx`, and tool outcome classification
 - `src/llm/*` — signal passing as a request option and abort error re-throwing
-- `src/config/*` — schema parsing and environment overrides
 - `src/web/*` — optional search/read provider behavior
 
 ## Good regression checks
@@ -43,12 +43,13 @@ A change that touches the conversation lifecycle should usually verify:
 
 1. a new session can start
 2. an existing session can resume
-3. slash commands still short-circuit deterministically
+3. slash commands still short-circuit deterministically (including `/reload`, whose result is also reported by a `reload`-sourced event)
 4. tool approval still blocks unsafe calls
 5. `turn.started`, `turn.completed`, and `tool.completed` events fire for the correct `sessionId` and `turnId`
 6. turn cancellation stops at the next checkpoint, records synthetic "denied" results for pending tool calls, and publishes `turn.cancelled` (not `turn.failed`)
 7. compaction still preserves tool-call structure and publishes paired `context.compaction.started` / `context.compaction.completed` events even on failure
 8. web tools still stay behind the Tavily configuration gate
+9. config reload: an unchanged fingerprint yields `unchanged`; a semantic LLM change rebuilds the runtime and emits `config.reloaded` with `runtimeRebuilt: true`; a `sessionDefaults`-only change advances the revision without rebuilding (`runtimeRebuilt: false`); an invalid edit returns `rejected` retaining the last snapshot and emits `config.reload.failed`; a rejected apply is not retried until `force: true`; and the 5-second poll never stacks a second reload while one is in flight
 
 ## Source anchors
 

@@ -1,9 +1,11 @@
 import { join } from "node:path";
-import { loadConfig } from "./load-config";
 
-export { loadConfig } from "./load-config";
-export type { Config, LLMConfig } from "./schemas";
+export const DEFAULT_CONFIG_PATH = join(import.meta.dirname, "config.yaml");
+export const DEFAULT_ENV_PATH = join(process.cwd(), ".env");
 
-const CONFIG_PATH = join(import.meta.dirname, "config.yaml");
-
-export const config = await loadConfig(CONFIG_PATH);
+export * from "./config-diff";
+export * from "./config-error";
+export * from "./config-store";
+export * from "./load-config";
+export * from "./parse-config";
+export * from "./schemas";

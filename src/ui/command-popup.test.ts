@@ -14,6 +14,7 @@ describe("toCommandOptions", () => {
 			"compact",
 			"context",
 			"help",
+			"reload",
 			"session",
 			"skills",
 		]);

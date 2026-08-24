@@ -14,6 +14,8 @@ import type {
 } from "../commands/command";
 import { createDefaultCommandRegistry } from "../commands/create-command-registry";
 import type {
+	ConfigReloadedEvent,
+	ConfigReloadFailedEvent,
 	ContextCompactionCompletedEvent,
 	ContextCompactionStartedEvent,
 	RuntimeEventBus,
@@ -139,6 +141,57 @@ export function describeSessionHeader(
 
 export const compactToolName = "compact";
 
+export function describeConfigReloaded(
+	event: ConfigReloadedEvent,
+): Extract<TranscriptDraft, { kind: "notice" }> {
+	return {
+		kind: "notice",
+		tone: "info",
+		title: "Configuration reloaded",
+		lines: event.runtimeRebuilt
+			? [
+					`Runtime: ${event.model}`,
+					`Tools: ${event.toolNames.join(", ") || "none"}`,
+					`Revision: ${event.revision}`,
+				]
+			: ["Changes apply to future sessions.", `Revision: ${event.revision}`],
+	};
+}
+
+export function describeConfigReloadFailed(
+	event: ConfigReloadFailedEvent,
+): Extract<TranscriptDraft, { kind: "notice" }> {
+	return {
+		kind: "notice",
+		tone: "warn",
+		title: "Configuration reload failed",
+		lines: [
+			`Continuing with revision ${event.retainedRevision}.`,
+			event.error.message,
+		],
+	};
+}
+
+export function createConfigPollTick(
+	reload: () => Promise<unknown>,
+	onError: (error: unknown) => void,
+): () => void {
+	let inFlight = false;
+
+	return () => {
+		if (inFlight) {
+			return;
+		}
+
+		inFlight = true;
+		void reload()
+			.catch(onError)
+			.finally(() => {
+				inFlight = false;
+			});
+	};
+}
+
 /** The row shown while compaction is running, before its outcome is known. */
 export function describeCompactionStart(
 	event: ContextCompactionStartedEvent,
@@ -216,6 +269,7 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 	// Set when a compaction row was printed, so `/compact` does not also repeat
 	// itself as text.
 	const compactionReportedRef = useRef(false);
+	const configReloadReportedRef = useRef(false);
 	const nextId = useRef(0);
 	const elapsedSeconds = useElapsedSeconds(turnStartedAt);
 	const spinnerFrame = useSpinner(
@@ -375,9 +429,50 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					}
 
 					return;
+				case "config.reloaded":
+					if (
+						event.source.kind === "system" &&
+						event.source.name === "reload"
+					) {
+						configReloadReportedRef.current = true;
+					}
+
+					append([describeConfigReloaded(event)]);
+					return;
+				case "config.reload.failed":
+					if (
+						event.source.kind === "system" &&
+						event.source.name === "reload"
+					) {
+						configReloadReportedRef.current = true;
+					}
+
+					append([describeConfigReloadFailed(event)]);
+					return;
 			}
 		});
 	}, [append, eventBus, session]);
+
+	useEffect(() => {
+		if (session === null) {
+			return;
+		}
+
+		const poll = createConfigPollTick(
+			() =>
+				session.runtime.reloadConfiguration({
+					source: { kind: "system", name: "config-poll" },
+				}),
+			(error) => {
+				logger.error("config.poll.failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			},
+		);
+		const interval = setInterval(poll, 5_000);
+
+		return () => clearInterval(interval);
+	}, [session]);
 
 	useEffect(() => {
 		if (!quitArmed) {
@@ -470,6 +565,10 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					return;
 				}
 
+				if (name === "reload" && configReloadReportedRef.current) {
+					return;
+				}
+
 				// `/context` is the one command whose answer is a picture, so the
 				// meter is rendered instead of its text.
 				if (name === "context" && session !== null) {
@@ -514,6 +613,7 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 			}
 
 			compactionReportedRef.current = false;
+			configReloadReportedRef.current = false;
 			setIsRunningCommand(true);
 			setTurnStartedAt(Date.now());
 
@@ -526,6 +626,11 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					getMessageCount: () => session.runtime.getMessageCount(),
 					getContextUsage: () => session.runtime.getContextUsage(),
 					compactContext: () => session.runtime.compactContext(),
+					reloadConfiguration: () =>
+						session.runtime.reloadConfiguration({
+							force: true,
+							source: { kind: "system", name: "reload" },
+						}),
 				});
 			} finally {
 				// Commands never overlap a turn: the queue only drains once the

@@ -30,6 +30,11 @@ function createContext(): SlashCommandContext {
 			compactedToolResultCount: 0,
 			summaryCompactedMessageCount: 0,
 		}),
+		reloadConfiguration: async () => ({
+			status: "unchanged",
+			revision: 1,
+			info: { model: "openai/model-a", toolNames: [] },
+		}),
 	};
 }
 

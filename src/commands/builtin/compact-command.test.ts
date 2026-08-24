@@ -40,6 +40,11 @@ function createContext(
 			thresholdRatio: 0.75,
 		}),
 		compactContext,
+		reloadConfiguration: async () => ({
+			status: "unchanged",
+			revision: 1,
+			info: { model: "openai/model-a", toolNames: [] },
+		}),
 	};
 }
 

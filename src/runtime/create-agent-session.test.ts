@@ -2,11 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Config } from "../config";
-import { InMemoryRuntimeEventBus } from "../events";
+import type { Config, ConfigSnapshot } from "../config";
+import { InMemoryRuntimeEventBus, type RuntimeEvent } from "../events";
 import { HistoryStore } from "../history";
 import { AgentRuntime } from "./agent-runtime";
 import { createAgentSession } from "./create-agent-session";
+import type { RuntimeConfigStore } from "./reloadable-agent-session";
 
 describe("createAgentSession", () => {
 	async function createTestConfig(): Promise<Config> {
@@ -49,11 +50,24 @@ You are Sonny.
 		return new InMemoryRuntimeEventBus();
 	}
 
+	function createConfigStore(config: Config): RuntimeConfigStore {
+		const snapshot: ConfigSnapshot = {
+			revision: 1,
+			loadedAt: new Date(),
+			config,
+		};
+
+		return {
+			current: snapshot,
+			refresh: async () => ({ status: "unchanged", snapshot }),
+		};
+	}
+
 	test("creates an agent session from config", async () => {
 		const config = await createTestConfig();
 
 		const result = await createAgentSession({
-			config,
+			configStore: createConfigStore(config),
 			events: createEventBus(),
 			approveToolCall: async () => ({
 				approved: true,
@@ -66,11 +80,80 @@ You are Sonny.
 		expect(result.restoredMessages).toEqual([]);
 	});
 
+	test("rebuilds a factory-created runtime from a newer config snapshot", async () => {
+		const initialConfig = await createTestConfig();
+		const nextConfig: Config = {
+			...initialConfig,
+			llm: {
+				...initialConfig.llm,
+				model: "anthropic/model-b",
+				reasoningEffort: "high",
+			},
+		};
+		const initialSnapshot: ConfigSnapshot = {
+			revision: 1,
+			loadedAt: new Date(),
+			config: initialConfig,
+		};
+		const nextSnapshot: ConfigSnapshot = {
+			revision: 2,
+			loadedAt: new Date(),
+			config: nextConfig,
+		};
+		let current = initialSnapshot;
+		let refreshCount = 0;
+		const configStore: RuntimeConfigStore = {
+			get current() {
+				return current;
+			},
+			async refresh() {
+				refreshCount += 1;
+
+				if (refreshCount === 1) {
+					return { status: "unchanged", snapshot: current };
+				}
+
+				current = nextSnapshot;
+				return {
+					status: "reloaded",
+					snapshot: current,
+					changedSections: ["llm"],
+				};
+			},
+		};
+		const eventBus = createEventBus();
+		const events: RuntimeEvent[] = [];
+		eventBus.subscribe((event) => events.push(event));
+		const result = await createAgentSession({
+			configStore,
+			events: eventBus,
+			approveToolCall: async () => ({ approved: true }),
+		});
+
+		await expect(
+			result.runtime.reloadConfiguration({
+				force: true,
+				source: { kind: "system", name: "reload" },
+			}),
+		).resolves.toMatchObject({
+			status: "reloaded",
+			revision: 2,
+			runtimeRebuilt: true,
+			info: { model: "anthropic/model-b" },
+		});
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			type: "config.reloaded",
+			model: "anthropic/model-b",
+			source: { kind: "system", name: "reload" },
+		});
+	});
+
 	test("creates history session files", async () => {
 		const config = await createTestConfig();
 
 		await createAgentSession({
-			config,
+			configStore: createConfigStore(config),
 			events: createEventBus(),
 			approveToolCall: async () => ({
 				approved: true,
@@ -108,7 +191,7 @@ You are Sonny.
 		});
 
 		const result = await createAgentSession({
-			config,
+			configStore: createConfigStore(config),
 			events: createEventBus(),
 			approveToolCall: async () => ({
 				approved: true,
@@ -155,7 +238,7 @@ You are Sonny.
 		});
 
 		const result = await createAgentSession({
-			config,
+			configStore: createConfigStore(config),
 			events: createEventBus(),
 			approveToolCall: async () => ({
 				approved: true,
@@ -177,7 +260,7 @@ You are Sonny.
 
 		await expect(
 			createAgentSession({
-				config,
+				configStore: createConfigStore(config),
 				events: createEventBus(),
 				approveToolCall: async () => ({
 					approved: true,
@@ -192,7 +275,7 @@ You are Sonny.
 
 		await expect(
 			createAgentSession({
-				config,
+				configStore: createConfigStore(config),
 				events: createEventBus(),
 				approveToolCall: async () => ({
 					approved: true,
@@ -207,7 +290,7 @@ You are Sonny.
 
 		await expect(
 			createAgentSession({
-				config,
+				configStore: createConfigStore(config),
 				events: createEventBus(),
 				approveToolCall: async () => ({
 					approved: true,

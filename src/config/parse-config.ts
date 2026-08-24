@@ -4,7 +4,7 @@ import { type Config, ConfigSchema } from "./schemas";
 
 type UnknownRecord = Record<string, unknown>;
 
-type ParseConfigOptions = {
+export type ParseConfigOptions = {
 	llmApiKey?: string;
 	tavilyApiKey?: string;
 };

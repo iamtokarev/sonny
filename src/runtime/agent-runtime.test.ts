@@ -6,10 +6,13 @@ import {
 } from "../events";
 import {
 	AgentRuntime,
-	type AgentRuntimeSession,
 	type AgentTurnInput,
 	type AgentTurnSession,
 } from "./agent-runtime";
+import type {
+	ConfigurableAgentRuntimeSession,
+	RuntimeConfigurationResult,
+} from "./reloadable-agent-session";
 
 type Deferred<T> = {
 	readonly promise: Promise<T>;
@@ -33,9 +36,16 @@ function createInput(content: string): AgentTurnInput {
 }
 
 function createRuntime(
-	session: AgentTurnSession & Partial<Omit<AgentRuntimeSession, "chat">>,
+	session: AgentTurnSession &
+		Partial<Omit<ConfigurableAgentRuntimeSession, "chat">>,
 	eventBus: InMemoryRuntimeEventBus,
 ): AgentRuntime {
+	const unchanged: RuntimeConfigurationResult = {
+		status: "unchanged",
+		revision: 1,
+		info: { model: "openai/model-a", toolNames: ["bash"] },
+	};
+
 	return new AgentRuntime({
 		sessionId: "session-1",
 		session: {
@@ -55,6 +65,7 @@ function createRuntime(
 				compactedToolResultCount: 0,
 				summaryCompactedMessageCount: 0,
 			}),
+			refreshConfiguration: async () => unchanged,
 			...session,
 		},
 		events: eventBus,
@@ -62,6 +73,109 @@ function createRuntime(
 }
 
 describe("AgentRuntime", () => {
+	test("refreshes configuration after turn start and before chat", async () => {
+		const eventBus = new InMemoryRuntimeEventBus();
+		const activity: string[] = [];
+		eventBus.subscribe((event) => activity.push(event.type));
+		const runtime = createRuntime(
+			{
+				async refreshConfiguration() {
+					activity.push("refresh");
+					return {
+						status: "unchanged",
+						revision: 1,
+						info: { model: "openai/model-a", toolNames: [] },
+					};
+				},
+				async chat() {
+					activity.push("chat");
+					return "Response";
+				},
+			},
+			eventBus,
+		);
+
+		await runtime.runTurn(createInput("Hello"));
+
+		expect(activity).toEqual([
+			"turn.started",
+			"refresh",
+			"chat",
+			"turn.completed",
+		]);
+	});
+
+	test("reports a rejected refresh and continues the turn", async () => {
+		const eventBus = new InMemoryRuntimeEventBus();
+		const events: RuntimeEvent[] = [];
+		eventBus.subscribe((event) => events.push(event));
+		const runtime = createRuntime(
+			{
+				async refreshConfiguration() {
+					return {
+						status: "rejected",
+						retainedRevision: 3,
+						phase: "load",
+						error: new Error("safe configuration failure"),
+					} as RuntimeConfigurationResult;
+				},
+				async chat() {
+					return "Response from retained runtime";
+				},
+			},
+			eventBus,
+		);
+
+		await expect(runtime.runTurn(createInput("Hello"))).resolves.toMatchObject({
+			content: "Response from retained runtime",
+		});
+		expect(events.map((event) => event.type)).toEqual([
+			"turn.started",
+			"config.reload.failed",
+			"turn.completed",
+		]);
+		expect(events[1]).toMatchObject({
+			retainedRevision: 3,
+			phase: "load",
+			error: { name: "Error", message: "safe configuration failure" },
+		});
+	});
+
+	test("publishes safe metadata for an applied runtime rebuild", async () => {
+		const eventBus = new InMemoryRuntimeEventBus();
+		const events: RuntimeEvent[] = [];
+		eventBus.subscribe((event) => events.push(event));
+		const runtime = createRuntime(
+			{
+				async refreshConfiguration() {
+					return {
+						status: "reloaded",
+						revision: 2,
+						changedSections: ["llm"],
+						runtimeRebuilt: true,
+						info: {
+							model: "anthropic/model-b",
+							toolNames: ["bash", "readFile"],
+						},
+					};
+				},
+				chat: async () => "Response",
+			},
+			eventBus,
+		);
+
+		await runtime.runTurn(createInput("Hello"));
+
+		expect(events[1]).toMatchObject({
+			type: "config.reloaded",
+			revision: 2,
+			changedSections: ["llm"],
+			runtimeRebuilt: true,
+			model: "anthropic/model-b",
+			toolNames: ["bash", "readFile"],
+		});
+		expect(JSON.stringify(events[1])).not.toContain("apiKey");
+	});
 	test("emits correlated lifecycle events around a successful turn", async () => {
 		const eventBus = new InMemoryRuntimeEventBus();
 		const events: RuntimeEvent[] = [];
