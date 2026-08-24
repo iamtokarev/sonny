@@ -16,6 +16,8 @@ import {
 import { ChatApp } from "./chat-loop";
 
 type RunTurn = (input: AgentTurnInput) => Promise<AgentTurnResult>;
+type ReloadConfiguration =
+	CreateAgentSessionResult["runtime"]["reloadConfiguration"];
 
 class TrackingEventBus extends InMemoryRuntimeEventBus {
 	unsubscribeCount = 0;
@@ -32,7 +34,14 @@ class TrackingEventBus extends InMemoryRuntimeEventBus {
 	}
 }
 
-function createSessionResult(runTurn: RunTurn): CreateAgentSessionResult {
+function createSessionResult(
+	runTurn: RunTurn,
+	reloadConfiguration: ReloadConfiguration = async () => ({
+		status: "unchanged",
+		revision: 1,
+		info: { model: "openai/model-a", toolNames: [] },
+	}),
+): CreateAgentSessionResult {
 	return {
 		runtime: {
 			runTurn,
@@ -52,6 +61,7 @@ function createSessionResult(runTurn: RunTurn): CreateAgentSessionResult {
 				compactedToolResultCount: 0,
 				summaryCompactedMessageCount: 0,
 			}),
+			reloadConfiguration,
 		} as unknown as CreateAgentSessionResult["runtime"],
 		historySession: {
 			id: "session-1",
@@ -112,12 +122,15 @@ function createToolEvent(
 function createChatHarness(
 	eventBus: InMemoryRuntimeEventBus,
 	runTurn: RunTurn,
+	reloadConfiguration?: ReloadConfiguration,
 	options: InkHarnessOptions = {},
 ): InkHarness {
 	return createInkHarness(
 		<ChatApp
 			eventBus={eventBus}
-			createSession={async () => createSessionResult(runTurn)}
+			createSession={async () =>
+				createSessionResult(runTurn, reloadConfiguration)
+			}
 		/>,
 		options,
 	);
@@ -227,6 +240,59 @@ describe("ChatApp runtime integration", () => {
 		}
 	});
 
+	test("forces manual reload and renders its event only once", async () => {
+		const eventBus = new InMemoryRuntimeEventBus();
+		const reload = mock<ReloadConfiguration>(async (options) => {
+			eventBus.publish({
+				eventId: "config-event-1",
+				sessionId: "session-1",
+				turnId: "reload-turn-1",
+				source: { kind: "system", name: "reload" },
+				occurredAt: "2026-01-01T00:00:00.000Z",
+				type: "config.reloaded",
+				revision: 2,
+				changedSections: ["llm"],
+				runtimeRebuilt: true,
+				model: "anthropic/model-b",
+				toolNames: ["bash"],
+			});
+
+			expect(options).toEqual({
+				force: true,
+				source: { kind: "system", name: "reload" },
+			});
+
+			return {
+				status: "reloaded",
+				revision: 2,
+				changedSections: ["llm"],
+				runtimeRebuilt: true,
+				info: { model: "anthropic/model-b", toolNames: ["bash"] },
+			};
+		});
+		const runTurn = mock(async () => ({
+			turnId: "turn-1",
+			content: "Unexpected response",
+		}));
+		const harness = createChatHarness(eventBus, runTurn, reload);
+
+		try {
+			await flush(harness);
+			await enter(harness, "/reload");
+			await flush(harness);
+
+			expect(reload).toHaveBeenCalledTimes(1);
+			expect(runTurn).not.toHaveBeenCalled();
+			expect(harness.output()).toContain("Runtime: anthropic/model-b");
+			expect(harness.output()).not.toContain(
+				"Configuration reloaded to revision 2.",
+			);
+		} finally {
+			harness.app.unmount();
+			await harness.app.waitUntilExit();
+		}
+	});
+
 	test("renders off a TTY instead of crashing on raw mode", async () => {
 		const runTurn = mock(async () => ({
 			turnId: "turn-1",
@@ -234,9 +300,12 @@ describe("ChatApp runtime integration", () => {
 		}));
 		// Piped stdin cannot be put into raw mode. Ink throws rather than
 		// degrading, so the app has to decline to listen for keys at all.
-		const harness = createChatHarness(new InMemoryRuntimeEventBus(), runTurn, {
-			isTTY: false,
-		});
+		const harness = createChatHarness(
+			new InMemoryRuntimeEventBus(),
+			runTurn,
+			undefined,
+			{ isTTY: false },
+		);
 
 		try {
 			await flush(harness);

@@ -3,8 +3,11 @@ import type { HistorySession } from "../history";
 import type { CreateAgentSessionResult } from "../runtime";
 import { restoreTranscript } from "../ui/transcript";
 import {
+	createConfigPollTick,
 	describeCompaction,
 	describeCompactionStart,
+	describeConfigReloaded,
+	describeConfigReloadFailed,
 	describeSessionHeader,
 	formatSessionExitSummary,
 } from "./chat-loop";
@@ -179,6 +182,81 @@ const eventMetadata = {
 	source: { kind: "cli" },
 	occurredAt: "2026-01-01T00:00:00.000Z",
 } as const;
+
+describe("configuration reload display", () => {
+	test("describes a rebuilt runtime without configuration values", () => {
+		expect(
+			describeConfigReloaded({
+				...eventMetadata,
+				type: "config.reloaded",
+				revision: 2,
+				changedSections: ["llm", "web"],
+				runtimeRebuilt: true,
+				model: "anthropic/model-b",
+				toolNames: ["bash", "webSearch"],
+			}),
+		).toEqual({
+			kind: "notice",
+			tone: "info",
+			title: "Configuration reloaded",
+			lines: [
+				"Runtime: anthropic/model-b",
+				"Tools: bash, webSearch",
+				"Revision: 2",
+			],
+		});
+	});
+
+	test("describes a rejected reload and retained revision", () => {
+		expect(
+			describeConfigReloadFailed({
+				...eventMetadata,
+				type: "config.reload.failed",
+				retainedRevision: 3,
+				phase: "load",
+				error: {
+					name: "ConfigReloadError",
+					message: "Could not read and validate Sonny configuration.",
+				},
+			}),
+		).toEqual({
+			kind: "notice",
+			tone: "warn",
+			title: "Configuration reload failed",
+			lines: [
+				"Continuing with revision 3.",
+				"Could not read and validate Sonny configuration.",
+			],
+		});
+	});
+});
+
+describe("createConfigPollTick", () => {
+	test("does not queue another poll while one is in flight", async () => {
+		let release!: () => void;
+		let calls = 0;
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const tick = createConfigPollTick(
+			async () => {
+				calls += 1;
+				await pending;
+			},
+			() => undefined,
+		);
+
+		tick();
+		tick();
+		expect(calls).toBe(1);
+
+		release();
+		await pending;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		tick();
+		expect(calls).toBe(2);
+	});
+});
 
 describe("describeCompactionStart", () => {
 	test("shows a running row so compaction is visible while it happens", () => {
