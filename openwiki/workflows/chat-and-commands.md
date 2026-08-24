@@ -1,8 +1,8 @@
 ---
 type: Workflow
 title: Sonny chat and command workflow
-description: Describes how the interactive TUI handles user input, slash commands, session selection, tool approvals, and resume/continue behavior.
-tags: [workflow, cli, commands, chat]
+description: Describes how the interactive TUI handles user input, slash commands, session selection, tool approvals, config hot-reload polling and the /reload command, and resume/continue behavior.
+tags: [workflow, cli, commands, chat, reload]
 resource: /src/cli/chat-loop.tsx
 ---
 
@@ -32,10 +32,11 @@ The built-in command set currently includes:
 - `/help` and `/h` for command help
 - `/context` for current context usage
 - `/compact` for manual context compaction
+- `/reload` for reloading configuration files (force, with a `reload` source)
 - `/skills [query]` for listing loaded skills
 - `/session` for session metadata
 
-Slash-command output is treated as UI-only and is not written into LLM history. A bare `/` is ordinary chat input because it has no command name; unknown named commands produce a UI-only error.
+Slash-command output is treated as UI-only and is not written into LLM history. A bare `/` is ordinary chat input because it has no command name; unknown named commands produce a UI-only error. Commands that need runtime state implement against a `SlashCommandContext` (`src/commands/command.ts`) exposing `getMessageCount()`, `getContextUsage()`, `compactContext()`, and `reloadConfiguration()`; `/reload` calls `reloadConfiguration()` and formats the `RuntimeConfigurationResult` (`unchanged` / `reloaded{runtimeRebuilt}` / `rejected`) via `createReloadCommand()` in `src/commands/builtin/reload-command.ts`.
 
 ## Resume and continue
 
@@ -51,6 +52,17 @@ The TUI shows a resumed-session banner when applicable and displays a final remi
 When the model wants to call a tool, the UI pauses for approval if the tool hooks request permission. The approval prompt is part of the interactive loop, not a separate batch workflow. After approval, `ToolExecutor` publishes `tool.started` and `tool.completed` events through the event bus; the chat loop subscribes (filtered by `sessionId`) and renders tool progress and results from those events rather than from direct return values.
 
 That design keeps high-risk operations explicit while still allowing the model to use tools for normal repository work.
+
+## Configuration reload
+
+Configuration can change while a session is running, and the TUI is the primary surface for that. Two reload entry points exist, both routed through `AgentRuntime.reloadConfiguration()` and serialized on the same turn queue:
+
+- **Background poll** — `ChatApp` starts a 5-second `setInterval` that calls `session.runtime.reloadConfiguration({ source: { kind: "system", name: "config-poll" } })`. `createConfigPollTick()` guards re-entrancy so a slow reload does not stack a second poll. Poll failures are logged (`config.poll.failed`) but never crash the loop.
+- **Manual `/reload`** — the command calls `session.runtime.reloadConfiguration({ force: true, source: { kind: "system", name: "reload" } })`. `force: true` retries a previously rejected apply even when the revision has not changed.
+
+Reload results are surfaced as runtime events rather than direct return values. The chat loop subscribes to `config.reloaded` and `config.reload.failed` and renders them through `describeConfigReloaded()` / `describeConfigReloadFailed()` as info/warn notices. Because `/reload` both emits a `message` result **and** triggers a `reload`-sourced event, the loop uses a `configReloadReportedRef` to suppress the duplicate command text when the event has already reported the reload; the ref resets on the next command.
+
+The reload lifecycle itself — snapshot advancement, `RuntimeConfigurationResult` discrimination, runtime rebuild via the builder, and `config.reloaded` / `config.reload.failed` emission by `AgentRuntime` — is documented in the [architecture overview](../architecture/overview.md); the configuration store and reload-error safety are covered in [configuration and operations](../operations/configuration.md).
 
 ## Turn cancellation
 
@@ -70,6 +82,7 @@ See [architecture overview](../architecture/overview.md) for how `AbortSignal` f
 - `src/commands/command.ts`
 - `src/commands/command-registry.ts`
 - `src/commands/create-command-registry.ts`
+- `src/commands/builtin/reload-command.ts`
 - `src/commands/builtin/*`
 - `src/runtime/agent-runtime.ts`
 - `src/ui/key-router.ts`

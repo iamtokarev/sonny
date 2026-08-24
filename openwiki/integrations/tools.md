@@ -64,6 +64,8 @@ The file policy blocks dotenv basenames, selected sensitive files, known credent
 
 The repository has grown from a simple chat loop into a local agent with filesystem, shell, skills, and web integration. The tool layer is the main extension point and the main safety boundary, so future changes should usually start here.
 
+The tool registry is constructed inside the runtime's `AgentSessionBuilder` factory (`src/runtime/create-agent-session.ts`), so it is rebuilt when a [config hot-reload](../operations/configuration.md) changes the runtime config signature — most importantly when `tavilyApiKey` is added or removed, which toggles `webSearch`/`webRead` availability on the live session.
+
 ## Source anchors
 
 - `src/tools/create-tool-registry.ts`
