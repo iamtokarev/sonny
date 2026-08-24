@@ -1,0 +1,2 @@
+# Sonny owns dotenv parsing so it can detect edits without mutating process.env.
+env = false

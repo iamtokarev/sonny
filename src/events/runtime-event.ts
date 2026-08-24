@@ -1,4 +1,5 @@
 import { randomUUIDv7 } from "bun";
+import type { ConfigSection } from "../config";
 import type { ToolCompletionStatus } from "../domain";
 import type { RuntimeSource, TurnContext } from "./turn-context";
 
@@ -77,6 +78,25 @@ export interface ContextCompactionCompletedEvent extends RuntimeEventBase {
 	readonly durationMs: number;
 }
 
+export interface ConfigReloadedEvent extends RuntimeEventBase {
+	readonly type: "config.reloaded";
+	readonly revision: number;
+	readonly changedSections: readonly ConfigSection[];
+	readonly runtimeRebuilt: boolean;
+	readonly model: string;
+	readonly toolNames: readonly string[];
+}
+
+export interface ConfigReloadFailedEvent extends RuntimeEventBase {
+	readonly type: "config.reload.failed";
+	readonly retainedRevision: number;
+	readonly phase: "load" | "apply";
+	readonly error: {
+		readonly name: string;
+		readonly message: string;
+	};
+}
+
 export type RuntimeEvent =
 	| TurnStartedEvent
 	| TurnCompletedEvent
@@ -85,7 +105,9 @@ export type RuntimeEvent =
 	| ToolStartedEvent
 	| ToolCompletedEvent
 	| ContextCompactionStartedEvent
-	| ContextCompactionCompletedEvent;
+	| ContextCompactionCompletedEvent
+	| ConfigReloadedEvent
+	| ConfigReloadFailedEvent;
 
 export function createEventMetadata(
 	context: TurnContext,

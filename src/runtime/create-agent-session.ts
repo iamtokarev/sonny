@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { tavily } from "@tavily/core";
 import { AgentSession, buildSystemPrompt, SessionState } from "../agent";
 import { loadAgentDefinition } from "../agents/agents-loader";
-import type { Config } from "../config";
 import {
 	ContextManager,
 	LlmContextSummarizer,
@@ -23,6 +22,11 @@ import { ToolExecutor } from "../tools/tool-executor";
 import { createLogger } from "../utils/logger";
 import { TavilyWebProvider } from "../web/tavily-web-provider";
 import { AgentRuntime } from "./agent-runtime";
+import {
+	type AgentSessionBuilder,
+	ReloadableAgentSession,
+	type RuntimeConfigStore,
+} from "./reloadable-agent-session";
 
 export type CreateAgentSessionMode = "new" | "resume" | "continue";
 
@@ -39,10 +43,9 @@ export type CreateAgentSessionResult = {
 };
 
 export type CreateAgentSessionOptions = {
-	config: Config;
+	configStore: RuntimeConfigStore;
 	approveToolCall: PermissionHook;
 	events: RuntimeEventPublisher;
-	skillsDirectory?: string;
 	resumeSessionId?: string;
 	continueLatest?: boolean;
 };
@@ -56,16 +59,26 @@ export async function createAgentSession(
 		throw new Error("Use either resumeSessionId or continueLatest, not both.");
 	}
 
-	const skillsResult = options.skillsDirectory
-		? await loadSkills(options.skillsDirectory)
-		: { skills: [], errors: [] };
+	const initialRefresh = await options.configStore.refresh();
+	if (initialRefresh.status === "rejected") {
+		logger.warn("config.refresh.rejected", {
+			errorName: initialRefresh.error.name,
+			errorMessage: initialRefresh.error.message,
+		});
+	}
+
+	const initialSnapshot = options.configStore.current;
+	const initialConfig = initialSnapshot.config;
+	const skillsResult = await loadSkills(
+		join(initialConfig.workspace, "skills"),
+	);
 
 	for (const error of skillsResult.errors) {
 		logger.warn("skill.load.failed", { error });
 	}
 
 	const historyStore = new HistoryStore(
-		join(options.config.workspace, ".history"),
+		join(initialConfig.workspace, ".history"),
 	);
 	let mode: CreateAgentSessionMode = "new";
 	let historySession: HistorySession;
@@ -88,13 +101,10 @@ export async function createAgentSession(
 		historySession = latestSession;
 		restoredMessages = historyStore.readMessages(historySession.id);
 	} else {
-		const agentsPath = join(
-			options.config.workspace,
-			options.config.agentsPath,
-		);
+		const agentsPath = join(initialConfig.workspace, initialConfig.agentsPath);
 		const agentDefinition = await loadAgentDefinition(
 			agentsPath,
-			options.config.defaultAgent,
+			initialConfig.defaultAgent,
 		);
 		const systemPrompt = buildSystemPrompt({
 			stable: [
@@ -104,7 +114,7 @@ export async function createAgentSession(
 		});
 		historySession = historyStore.createSession({
 			id: randomUUID(),
-			agentId: options.config.defaultAgent,
+			agentId: initialConfig.defaultAgent,
 			systemPrompt,
 		});
 	}
@@ -118,36 +128,53 @@ export async function createAgentSession(
 	const state = new SessionState({
 		initialMessages: restoredMessages,
 	});
-	const llm = new LLMProvider(options.config.llm);
-	const webProvider = options.config.tavilyApiKey
-		? new TavilyWebProvider(tavily({ apiKey: options.config.tavilyApiKey }))
-		: undefined;
-	const tools = createDefaultToolRegistry({
-		skills: skillsResult.skills,
-		webSearchProvider: webProvider,
-		webReadProvider: webProvider,
-	});
-	const hooks = createDefaultToolHooks(options.approveToolCall);
-	const toolExecutor = new ToolExecutor(tools, hooks);
-	const contextManager = new ContextManager({
-		tokenCounter: new RoughTokenCounter(),
-		summarizer: new LlmContextSummarizer(llm),
-		...options.config.contextCompaction,
-	});
 
-	const agentSession = new AgentSession(
-		systemPrompt,
-		state,
-		llm,
-		tools,
-		toolExecutor,
-		historyRecorder,
-		contextManager,
+	const buildSession: AgentSessionBuilder = (config) => {
+		const llm = new LLMProvider(config.llm);
+		const webProvider = config.tavilyApiKey
+			? new TavilyWebProvider(tavily({ apiKey: config.tavilyApiKey }))
+			: undefined;
+		const tools = createDefaultToolRegistry({
+			skills: skillsResult.skills,
+			webSearchProvider: webProvider,
+			webReadProvider: webProvider,
+		});
+		const hooks = createDefaultToolHooks(options.approveToolCall);
+		const toolExecutor = new ToolExecutor(tools, hooks);
+		const contextManager = new ContextManager({
+			tokenCounter: new RoughTokenCounter(),
+			summarizer: new LlmContextSummarizer(llm),
+			...config.contextCompaction,
+		});
+
+		return {
+			session: new AgentSession(
+				systemPrompt,
+				state,
+				llm,
+				tools,
+				toolExecutor,
+				historyRecorder,
+				contextManager,
+			),
+			info: {
+				model: config.llm.model,
+				toolNames: tools.list().map((tool) => tool.name),
+			},
+		};
+	};
+
+	const initial = buildSession(initialConfig);
+	const reloadableSession = new ReloadableAgentSession(
+		options.configStore,
+		buildSession,
+		initialSnapshot,
+		initial,
 	);
 
 	const runtime = new AgentRuntime({
 		sessionId: historySession.id,
-		session: agentSession,
+		session: reloadableSession,
 		events: options.events,
 	});
 
@@ -156,8 +183,8 @@ export async function createAgentSession(
 		historySession,
 		restoredMessageCount,
 		restoredMessages,
-		toolNames: tools.list().map((tool) => tool.name),
-		model: options.config.llm.model,
+		toolNames: [...initial.info.toolNames],
+		model: initial.info.model,
 		skills: skillsResult.skills,
 		mode,
 	};
