@@ -29,6 +29,8 @@ function resolveOverrides(
 	return {
 		llmApiKey: process.env.LLM_API_KEY ?? fileEnvironment.LLM_API_KEY,
 		tavilyApiKey: process.env.TAVILY_API_KEY ?? fileEnvironment.TAVILY_API_KEY,
+		telegramBotToken:
+			process.env.TELEGRAM_BOT_TOKEN ?? fileEnvironment.TELEGRAM_BOT_TOKEN,
 	};
 }
 

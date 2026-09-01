@@ -21,6 +21,12 @@ function createConfig(overrides: Partial<Config> = {}): Config {
 			protectedTailMessages: 6,
 			summaryMaxTokens: 4000,
 		},
+		channels: {
+			telegram: {
+				enabled: false,
+				allowedUserIds: [],
+			},
+		},
 		...overrides,
 	};
 }
@@ -74,5 +80,22 @@ describe("createRuntimeConfigSignature", () => {
 
 		expect(createRuntimeConfigSignature(defaultsChanged)).toBe(signature);
 		expect(signature).not.toContain(config.llm.apiKey);
+	});
+
+	test("does not change for channel-only changes", () => {
+		const config = createConfig();
+		const channelsChanged = createConfig({
+			channels: {
+				telegram: {
+					enabled: true,
+					botToken: "telegram-token",
+					allowedUserIds: ["123"],
+				},
+			},
+		});
+
+		expect(createRuntimeConfigSignature(channelsChanged)).toBe(
+			createRuntimeConfigSignature(config),
+		);
 	});
 });

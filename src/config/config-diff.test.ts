@@ -21,6 +21,12 @@ function createConfig(overrides: Partial<Config> = {}): Config {
 			protectedTailMessages: 6,
 			summaryMaxTokens: 4000,
 		},
+		channels: {
+			telegram: {
+				enabled: false,
+				allowedUserIds: [],
+			},
+		},
 		...overrides,
 	};
 }
@@ -50,5 +56,20 @@ describe("diffConfigSections", () => {
 		const config = createConfig();
 
 		expect(diffConfigSections(config, structuredClone(config))).toEqual([]);
+	});
+
+	test("reports channel changes", () => {
+		const previous = createConfig();
+		const next = createConfig({
+			channels: {
+				telegram: {
+					enabled: true,
+					botToken: "telegram-token",
+					allowedUserIds: ["123"],
+				},
+			},
+		});
+
+		expect(diffConfigSections(previous, next)).toEqual(["channels"]);
 	});
 });

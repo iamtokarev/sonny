@@ -14,3 +14,8 @@ contextCompaction:
   protectedHeadMessages: 4
   protectedTailMessages: 6
   summaryMaxTokens: 4000
+
+channels:
+  telegram:
+    enabled: false
+    allowedUserIds: []

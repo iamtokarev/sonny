@@ -7,6 +7,7 @@ type UnknownRecord = Record<string, unknown>;
 export type ParseConfigOptions = {
 	llmApiKey?: string;
 	tavilyApiKey?: string;
+	telegramBotToken?: string;
 };
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -17,14 +18,30 @@ function applyEnvOverrides(
 	data: unknown,
 	options: ParseConfigOptions,
 ): unknown {
-	if ((!options.llmApiKey && !options.tavilyApiKey) || !isRecord(data)) {
+	if (
+		(!options.llmApiKey &&
+			!options.tavilyApiKey &&
+			!options.telegramBotToken) ||
+		!isRecord(data)
+	) {
 		return data;
 	}
 
 	const llm = isRecord(data.llm) ? data.llm : {};
+	const channels = isRecord(data.channels) ? data.channels : {};
+	const telegram = isRecord(channels.telegram) ? channels.telegram : {};
 
 	return {
 		...data,
+		channels: {
+			...channels,
+			telegram: {
+				...telegram,
+				...(options.telegramBotToken
+					? { botToken: options.telegramBotToken }
+					: {}),
+			},
+		},
 		...(options.tavilyApiKey ? { tavilyApiKey: options.tavilyApiKey } : {}),
 		llm: {
 			...llm,

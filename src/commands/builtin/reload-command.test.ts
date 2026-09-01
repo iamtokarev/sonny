@@ -102,6 +102,51 @@ describe("createReloadCommand", () => {
 		});
 	});
 
+	test("requires a gateway restart for channel changes", async () => {
+		const command = createReloadCommand();
+
+		await expect(
+			command.execute(
+				"",
+				createContext({
+					status: "reloaded",
+					revision: 5,
+					changedSections: ["channels"],
+					runtimeRebuilt: false,
+					info: { model: "openai/model-a", toolNames: [] },
+				}),
+			),
+		).resolves.toEqual({
+			type: "message",
+			content:
+				"Configuration reloaded to revision 5. Channel changes require gateway restart.",
+		});
+	});
+
+	test("includes the gateway restart notice when runtime settings also change", async () => {
+		const command = createReloadCommand();
+
+		await expect(
+			command.execute(
+				"",
+				createContext({
+					status: "reloaded",
+					revision: 6,
+					changedSections: ["llm", "channels"],
+					runtimeRebuilt: true,
+					info: {
+						model: "anthropic/model-b",
+						toolNames: ["bash"],
+					},
+				}),
+			),
+		).resolves.toEqual({
+			type: "message",
+			content:
+				"Configuration reloaded to revision 6. Model: anthropic/model-b. Tools: bash. Channel changes require gateway restart.",
+		});
+	});
+
 	test("formats a rejected reload with the retained revision", async () => {
 		const command = createReloadCommand();
 

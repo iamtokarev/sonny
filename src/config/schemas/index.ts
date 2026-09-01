@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 
+import { ChannelsConfigSchema } from "./channels.schema";
 import {
 	ContextCompactionConfigSchema,
 	DEFAULT_CONTEXT_COMPACTION_CONFIG,
@@ -15,6 +16,12 @@ export const ConfigSchema = z.object({
 	contextCompaction: ContextCompactionConfigSchema.default(
 		DEFAULT_CONTEXT_COMPACTION_CONFIG,
 	),
+	channels: ChannelsConfigSchema.default({
+		telegram: {
+			enabled: false,
+			allowedUserIds: [],
+		},
+	}),
 
 	// web search
 	tavilyApiKey: z.string().optional(),
@@ -22,5 +29,6 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
+export * from "./channels.schema";
 export * from "./context-compaction.schema";
 export * from "./llm.schema";

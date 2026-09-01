@@ -4,6 +4,7 @@ export type ConfigSection =
 	| "llm"
 	| "contextCompaction"
 	| "web"
+	| "channels"
 	| "sessionDefaults";
 
 export function diffConfigSections(
@@ -25,6 +26,10 @@ export function diffConfigSections(
 
 	if (previous.tavilyApiKey !== next.tavilyApiKey) {
 		changed.push("web");
+	}
+
+	if (JSON.stringify(previous.channels) !== JSON.stringify(next.channels)) {
+		changed.push("channels");
 	}
 
 	if (

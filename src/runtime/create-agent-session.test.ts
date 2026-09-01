@@ -43,6 +43,12 @@ You are Sonny.
 				temperature: 0.7,
 				maxTokens: 2048,
 			},
+			channels: {
+				telegram: {
+					enabled: false,
+					allowedUserIds: [],
+				},
+			},
 		};
 	}
 

@@ -32,6 +32,12 @@ function createConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
 			protectedTailMessages: 6,
 			summaryMaxTokens: 4000,
 		},
+		channels: {
+			telegram: {
+				enabled: false,
+				allowedUserIds: [],
+			},
+		},
 		...overrides,
 	};
 }
