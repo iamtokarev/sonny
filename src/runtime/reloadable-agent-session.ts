@@ -8,7 +8,7 @@ import {
 	toSafeConfigError,
 } from "../config";
 import type { ContextUsage, PreparedContext } from "../context";
-import type { TurnContext } from "../events";
+import type { RuntimeSource, TurnContext } from "../events";
 import type { AgentRuntimeSession } from "./agent-runtime";
 import { createRuntimeConfigSignature } from "./runtime-config-signature";
 
@@ -78,8 +78,8 @@ export class ReloadableAgentSession implements ConfigurableAgentRuntimeSession {
 		return this.active.session.getMessageCount();
 	}
 
-	getContextUsage(): ContextUsage {
-		return this.active.session.getContextUsage();
+	getContextUsage(source: RuntimeSource): ContextUsage {
+		return this.active.session.getContextUsage(source);
 	}
 
 	compactContext(turnContext: TurnContext): Promise<PreparedContext> {

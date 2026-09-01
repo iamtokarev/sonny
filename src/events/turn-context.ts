@@ -8,8 +8,9 @@ export type RuntimeSource =
 			readonly kind: "channel";
 			readonly channel: string;
 			readonly conversationId: string;
+			readonly conversationKind: "direct" | "group" | "channel";
 			readonly threadId?: string;
-			readonly userId?: string;
+			readonly userId: string;
 	  }
 	| {
 			readonly kind: "system";

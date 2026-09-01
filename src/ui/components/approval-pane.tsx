@@ -1,10 +1,16 @@
 import { Box, Text } from "ink";
-import type { ApprovalBodyLine, ApprovalModel } from "../approval";
+import type {
+	ToolApprovalDescription,
+	ToolApprovalDescriptionLine,
+} from "../../tools/tool-approval-description";
 import type { Theme } from "../theme";
 import { useLayout, useTheme } from "../ui-context";
 import { padTo } from "../wrap";
 
-function lineColor(line: ApprovalBodyLine, theme: Theme): string | undefined {
+function lineColor(
+	line: ToolApprovalDescriptionLine,
+	theme: Theme,
+): string | undefined {
 	switch (line.kind) {
 		case "command":
 			return theme.bright;
@@ -26,7 +32,11 @@ function lineColor(line: ApprovalBodyLine, theme: Theme): string | undefined {
  * already there. The bar is warn: the one moment warn marks something that has
  * not finished yet.
  */
-export function ApprovalPane({ approval }: { approval: ApprovalModel }) {
+export function ApprovalPane({
+	approval,
+}: {
+	approval: ToolApprovalDescription;
+}) {
 	const theme = useTheme();
 	const { columns } = useLayout();
 	const width = Math.max(24, columns) - 2;
@@ -40,7 +50,7 @@ export function ApprovalPane({ approval }: { approval: ApprovalModel }) {
 					{padTo(`  ${approval.description}`, width - approval.toolName.length)}
 				</Text>
 			</Text>
-			{approval.body.map((line, index) => (
+			{approval.lines.map((line, index) => (
 				<Text
 					// biome-ignore lint/suspicious/noArrayIndexKey: terminal rows are positional and never reorder
 					key={`${index}-${line.kind}`}

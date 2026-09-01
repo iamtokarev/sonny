@@ -102,7 +102,19 @@ describe("ToolExecutor", () => {
 		expect(permissionCalled).toBe(false);
 	});
 
-	test("preTool ask calls permission hook", async () => {
+	test("preTool ask forwards the originating turn to permission", async () => {
+		const abort = new AbortController();
+		turnContext = {
+			...turnContext,
+			source: {
+				kind: "channel",
+				channel: "telegram",
+				conversationId: "conversation-1",
+				conversationKind: "direct",
+				userId: "user-1",
+			},
+			signal: abort.signal,
+		};
 		const permissionRequests: unknown[] = [];
 		const executor = new ToolExecutor(registry, {
 			preTool: [() => ({ action: "ask", reason: "needs user approval" })],
@@ -124,6 +136,18 @@ describe("ToolExecutor", () => {
 			toolCallId: "call_test",
 			toolName: "test_tool",
 			reason: "needs user approval",
+			turn: {
+				sessionId: "session-1",
+				turnId: "turn-1",
+				source: {
+					kind: "channel",
+					channel: "telegram",
+					conversationId: "conversation-1",
+					conversationKind: "direct",
+					userId: "user-1",
+				},
+				signal: abort.signal,
+			},
 		});
 	});
 

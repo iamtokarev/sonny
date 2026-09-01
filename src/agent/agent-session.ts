@@ -1,3 +1,4 @@
+import { buildChannelPrompt } from "../channels";
 import type {
 	ContextManager,
 	ContextUsage,
@@ -5,7 +6,7 @@ import type {
 	TokenCountRequest,
 } from "../context";
 import type { ChatMessage, ToolCall, ToolSchema } from "../domain";
-import type { TurnContext } from "../events";
+import type { RuntimeSource, TurnContext } from "../events";
 import type { HistoryRecorderSink } from "../history";
 import type { LLMChatResult } from "../llm";
 import { getToolCompletionStatus } from "../tools/tool";
@@ -13,6 +14,7 @@ import type { ToolExecutor } from "../tools/tool-executor";
 import type { ToolRegistry } from "../tools/tool-registry";
 import { createLogger } from "../utils/logger";
 import type { SessionState } from "./session-state";
+import { buildSystemPrompt } from "./system-prompt-builder";
 
 type ContextController = Pick<
 	ContextManager,
@@ -53,12 +55,14 @@ export class AgentSession {
 		return this.state.messageCount;
 	}
 
-	getContextUsage(): ContextUsage {
+	getContextUsage(source: RuntimeSource): ContextUsage {
 		if (this.contextManager === undefined) {
 			throw new Error("Context manager is not configured.");
 		}
 
-		return this.contextManager.inspect(this.buildContextRequest());
+		return this.contextManager.inspect(
+			this.buildContextRequest(this.buildEffectiveSystemPrompt(source)),
+		);
 	}
 
 	async compactContext(turnContext: TurnContext): Promise<PreparedContext> {
@@ -67,7 +71,9 @@ export class AgentSession {
 		}
 
 		const preparedContext = await this.contextManager.prepare(
-			this.buildContextRequest(),
+			this.buildContextRequest(
+				this.buildEffectiveSystemPrompt(turnContext.source),
+			),
 			{ forceSummary: true, turnContext },
 		);
 
@@ -89,8 +95,11 @@ export class AgentSession {
 				turnContext.signal?.throwIfAborted();
 
 				const toolSchemas = this.tools?.getSchemas() ?? [];
-				await this.prepareContext(toolSchemas, turnContext);
-				const messages = this.state.buildMessages(this.systemPrompt);
+				const systemPrompt = this.buildEffectiveSystemPrompt(
+					turnContext.source,
+				);
+				await this.prepareContext(toolSchemas, turnContext, systemPrompt);
+				const messages = this.state.buildMessages(systemPrompt);
 
 				logger.info("llm.turn.started", {
 					iteration,
@@ -215,6 +224,7 @@ export class AgentSession {
 	private async prepareContext(
 		toolSchemas: ToolSchema[],
 		turnContext: TurnContext,
+		systemPrompt: string,
 	): Promise<void> {
 		// Automatic compaction is a best-effort optimization. A transient
 		// summarizer failure must not abort the user's turn, so degrade to the
@@ -223,7 +233,7 @@ export class AgentSession {
 		try {
 			const preparedContext = await this.contextManager?.prepare(
 				{
-					systemPrompt: this.systemPrompt,
+					systemPrompt,
 					messages: this.state.getMessages(),
 					tools: toolSchemas,
 				},
@@ -242,9 +252,16 @@ export class AgentSession {
 		}
 	}
 
-	private buildContextRequest(): TokenCountRequest {
+	private buildEffectiveSystemPrompt(source: RuntimeSource): string {
+		return buildSystemPrompt({
+			stable: [this.systemPrompt],
+			context: [buildChannelPrompt(source)],
+		});
+	}
+
+	private buildContextRequest(systemPrompt: string): TokenCountRequest {
 		return {
-			systemPrompt: this.systemPrompt,
+			systemPrompt,
 			messages: this.state.getMessages(),
 			tools: this.tools?.getSchemas() ?? [],
 		};

@@ -21,12 +21,15 @@ import type {
 	RuntimeEventBus,
 } from "../events";
 import type { CreateAgentSessionResult } from "../runtime";
+import {
+	describeToolApproval,
+	type ToolApprovalDescription,
+} from "../tools/tool-approval-description";
 import type {
 	ToolApprovalDecision,
 	ToolApprovalRequest,
 	ToolApprover,
 } from "../tools/tool-executor";
-import { type ApprovalModel, describeApproval } from "../ui/approval";
 import {
 	type CommandOption,
 	filterCommands,
@@ -74,7 +77,7 @@ type ChatAppProps = {
 
 type ApprovalState = {
 	request: ToolApprovalRequest;
-	model: ApprovalModel;
+	model: ToolApprovalDescription;
 	resolve: (decision: ToolApprovalDecision) => void;
 };
 
@@ -336,7 +339,11 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					toolName: request.toolName,
 					parameters: request.parameters,
 				});
-				setApproval({ request, model: describeApproval(request), resolve });
+				setApproval({
+					request,
+					model: describeToolApproval(request),
+					resolve,
+				});
 			});
 
 		void createSession(approveToolCall)
@@ -430,20 +437,14 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 
 					return;
 				case "config.reloaded":
-					if (
-						event.source.kind === "system" &&
-						event.source.name === "reload"
-					) {
+					if (event.source.kind === "cli") {
 						configReloadReportedRef.current = true;
 					}
 
 					append([describeConfigReloaded(event)]);
 					return;
 				case "config.reload.failed":
-					if (
-						event.source.kind === "system" &&
-						event.source.name === "reload"
-					) {
+					if (event.source.kind === "cli") {
 						configReloadReportedRef.current = true;
 					}
 
@@ -575,7 +576,9 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					append([
 						{
 							kind: "context",
-							meter: describeUsage(session.runtime.getContextUsage()),
+							meter: describeUsage(
+								session.runtime.getContextUsage({ kind: "cli" }),
+							),
 						},
 					]);
 					return;
@@ -624,12 +627,14 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					historySession: session.historySession,
 					skills: session.skills,
 					getMessageCount: () => session.runtime.getMessageCount(),
-					getContextUsage: () => session.runtime.getContextUsage(),
-					compactContext: () => session.runtime.compactContext(),
+					getContextUsage: () =>
+						session.runtime.getContextUsage({ kind: "cli" }),
+					compactContext: () =>
+						session.runtime.compactContext({ source: { kind: "cli" } }),
 					reloadConfiguration: () =>
 						session.runtime.reloadConfiguration({
 							force: true,
-							source: { kind: "system", name: "reload" },
+							source: { kind: "cli" },
 						}),
 				});
 			} finally {
@@ -854,7 +859,9 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 			? null
 			: (() => {
 					try {
-						return describeUsage(session.runtime.getContextUsage());
+						return describeUsage(
+							session.runtime.getContextUsage({ kind: "cli" }),
+						);
 					} catch {
 						return null;
 					}

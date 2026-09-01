@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	InMemoryRuntimeEventBus,
 	type RuntimeEvent,
+	type RuntimeSource,
 	type TurnContext,
 } from "../events";
 import {
@@ -383,19 +384,106 @@ describe("AgentRuntime", () => {
 			thresholdTokens: 150_000,
 			thresholdRatio: 0.75,
 		};
+		let inspectedSource: RuntimeSource | undefined;
 		const runtime = createRuntime(
 			{
 				async chat() {
 					return "Response";
 				},
 				getMessageCount: () => 7,
-				getContextUsage: () => usage,
+				getContextUsage: (source) => {
+					inspectedSource = source;
+					return usage;
+				},
 			},
 			eventBus,
 		);
 
 		expect(runtime.getMessageCount()).toBe(7);
 		expect(runtime.getContextUsage()).toBe(usage);
+		expect(inspectedSource).toEqual({ kind: "cli" });
+	});
+
+	test("preserves a channel source for inspection and manual compaction", async () => {
+		const eventBus = new InMemoryRuntimeEventBus();
+		const source: RuntimeSource = {
+			kind: "channel",
+			channel: "telegram",
+			conversationId: "conversation-1",
+			conversationKind: "direct",
+			userId: "user-1",
+		};
+		let inspectedSource: RuntimeSource | undefined;
+		let compactionContext: TurnContext | undefined;
+		const runtime = createRuntime(
+			{
+				chat: async () => "Response",
+				getContextUsage(inputSource) {
+					inspectedSource = inputSource;
+					return {
+						tokenCount: 0,
+						contextWindowTokens: 200_000,
+						thresholdTokens: 150_000,
+						thresholdRatio: 0.75,
+					};
+				},
+				async compactContext(turnContext) {
+					compactionContext = turnContext;
+					return {
+						messages: [],
+						tokenCountBefore: 0,
+						tokenCountAfter: 0,
+						thresholdTokens: 150_000,
+						changed: false,
+						compactedToolResultCount: 0,
+						summaryCompactedMessageCount: 0,
+					};
+				},
+			},
+			eventBus,
+		);
+
+		runtime.getContextUsage(source);
+		await runtime.compactContext({ source });
+
+		expect(inspectedSource).toBe(source);
+		expect(compactionContext?.source).toBe(source);
+	});
+
+	test("uses the requesting channel source for configuration reload events", async () => {
+		const eventBus = new InMemoryRuntimeEventBus();
+		const events: RuntimeEvent[] = [];
+		eventBus.subscribe((event) => events.push(event));
+		const source: RuntimeSource = {
+			kind: "channel",
+			channel: "telegram",
+			conversationId: "conversation-1",
+			conversationKind: "direct",
+			userId: "user-1",
+		};
+		const runtime = createRuntime(
+			{
+				chat: async () => "Response",
+				async refreshConfiguration() {
+					return {
+						status: "reloaded",
+						revision: 2,
+						changedSections: ["llm"],
+						runtimeRebuilt: true,
+						info: { model: "openai/model-b", toolNames: [] },
+					};
+				},
+			},
+			eventBus,
+		);
+
+		await runtime.reloadConfiguration({ force: true, source });
+
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			type: "config.reloaded",
+			source,
+		});
 	});
 
 	test("queues context compaction behind the active turn", async () => {
