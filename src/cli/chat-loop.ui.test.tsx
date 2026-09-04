@@ -338,6 +338,19 @@ describe("ChatApp runtime integration", () => {
 		const eventBus = new InMemoryRuntimeEventBus();
 		const reload = mock<ReloadConfiguration>(async (options) => {
 			eventBus.publish({
+				eventId: "config-poll-event-1",
+				sessionId: "session-1",
+				turnId: "poll-turn-1",
+				source: { kind: "system", name: "config-poll" },
+				occurredAt: "2026-01-01T00:00:00.000Z",
+				type: "config.reloaded",
+				revision: 2,
+				changedSections: ["llm"],
+				runtimeRebuilt: true,
+				model: "openai/poll-model",
+				toolNames: ["bash"],
+			});
+			eventBus.publish({
 				eventId: "config-event-1",
 				sessionId: "session-1",
 				turnId: "reload-turn-1",
@@ -377,6 +390,7 @@ describe("ChatApp runtime integration", () => {
 
 			expect(reload).toHaveBeenCalledTimes(1);
 			expect(runTurn).not.toHaveBeenCalled();
+			expect(harness.output()).toContain("Runtime: openai/poll-model");
 			expect(harness.output()).toContain("Runtime: anthropic/model-b");
 			expect(harness.output()).not.toContain(
 				"Configuration reloaded to revision 2.",

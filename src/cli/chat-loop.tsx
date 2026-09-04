@@ -8,11 +8,11 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type {
-	SlashCommandDispatchResult,
-	SlashCommandResult,
-} from "../commands/command";
 import { createDefaultCommandRegistry } from "../commands/create-command-registry";
+import {
+	type SessionInteractionMessage,
+	SessionInteractor,
+} from "../conversation";
 import type {
 	ConfigReloadedEvent,
 	ConfigReloadFailedEvent,
@@ -33,7 +33,6 @@ import type {
 import {
 	type CommandOption,
 	filterCommands,
-	findClosestCommand,
 	toCommandOptions,
 } from "../ui/command-popup";
 import { ApprovalPane } from "../ui/components/approval-pane";
@@ -263,6 +262,11 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 	const [sendError, setSendError] = useState<string | null>(null);
 	// Commands can be slow too — `/compact` summarises the whole conversation.
 	const [isRunningCommand, setIsRunningCommand] = useState(false);
+	const interactor = useMemo(
+		() =>
+			session === null ? null : new SessionInteractor(session, commandRegistry),
+		[commandRegistry, session],
+	);
 
 	const isBusy = isThinking || isRunningCommand;
 
@@ -273,6 +277,7 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 	// itself as text.
 	const compactionReportedRef = useRef(false);
 	const configReloadReportedRef = useRef(false);
+	const activeCommandNameRef = useRef<string | null>(null);
 	const nextId = useRef(0);
 	const elapsedSeconds = useElapsedSeconds(turnStartedAt);
 	const spinnerFrame = useSpinner(
@@ -431,20 +436,32 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					// An unchanged context is not worth a row; `/compact` still says
 					// so in words.
 					if (event.changed) {
-						compactionReportedRef.current = true;
+						if (
+							activeCommandNameRef.current === "compact" &&
+							event.source.kind === "cli"
+						) {
+							compactionReportedRef.current = true;
+						}
+
 						append([{ kind: "tool", row: describeCompaction(event) }]);
 					}
 
 					return;
 				case "config.reloaded":
-					if (event.source.kind === "cli") {
+					if (
+						activeCommandNameRef.current === "reload" &&
+						event.source.kind === "cli"
+					) {
 						configReloadReportedRef.current = true;
 					}
 
 					append([describeConfigReloaded(event)]);
 					return;
 				case "config.reload.failed":
-					if (event.source.kind === "cli") {
+					if (
+						activeCommandNameRef.current === "reload" &&
+						event.source.kind === "cli"
+					) {
 						configReloadReportedRef.current = true;
 					}
 
@@ -485,33 +502,90 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 		return () => clearTimeout(timer);
 	}, [quitArmed]);
 
-	const runTurn = useCallback(
-		async (text: string): Promise<void> => {
-			if (session === null) {
-				logger.warn("ui.submit.ignored_session_not_ready", {
-					messageLength: text.length,
-				});
+	const renderInteractionMessage = useCallback(
+		(message: SessionInteractionMessage): void => {
+			if (message.kind === "assistant") {
+				append([{ kind: "answer", text: message.content }]);
 				return;
 			}
 
+			if (message.kind === "notice") {
+				appendNotice("info", null, message.content);
+				return;
+			}
+
+			// Compaction and reload already report their own runtime events. When
+			// those events belonged to this command, repeating the text says it twice.
+			if (
+				(message.commandName === "compact" && compactionReportedRef.current) ||
+				(message.commandName === "reload" && configReloadReportedRef.current)
+			) {
+				return;
+			}
+
+			// `/context` is the one command whose answer is a picture, so the meter
+			// remains a CLI presentation concern rather than an interactor concern.
+			if (message.commandName === "context" && session !== null) {
+				append([
+					{
+						kind: "context",
+						meter: describeUsage(
+							session.runtime.getContextUsage({ kind: "cli" }),
+						),
+					},
+				]);
+				return;
+			}
+
+			appendNotice("info", null, message.content);
+		},
+		[append, appendNotice, session],
+	);
+
+	const submit = useCallback(
+		async (raw: string): Promise<void> => {
+			const text = raw.trim();
+
+			if (text.length === 0 || interactor === null) {
+				return;
+			}
+
+			if (["q", "quit", "exit"].includes(text.toLowerCase())) {
+				exit();
+				return;
+			}
+
+			const commandName = text.startsWith("/")
+				? (text.slice(1).split(/\s+/, 1)[0] ?? "")
+				: null;
 			const abort = new AbortController();
 			turnAbortRef.current = abort;
-
-			append([{ kind: "user", text }]);
+			activeCommandNameRef.current = commandName;
+			compactionReportedRef.current = false;
+			configReloadReportedRef.current = false;
 			setSendError(null);
 			setIsThinking(true);
+			setIsRunningCommand(commandName !== null);
 			setTurnStartedAt(Date.now());
+			if (commandName === null) {
+				append([{ kind: "user", text }]);
+			}
 			logger.info("ui.submit.started", { messageLength: text.length });
 
 			try {
-				const { content: response } = await session.runtime.runTurn({
+				const result = await interactor.handle({
 					content: text,
 					source: { kind: "cli" },
 					signal: abort.signal,
 				});
 
-				logger.info("ui.submit.completed", { responseLength: response.length });
-				append([{ kind: "answer", text: response }]);
+				for (const message of result.messages) {
+					renderInteractionMessage(message);
+				}
+
+				if (result.exitRequested) {
+					exit();
+				}
 			} catch (error) {
 				// A cancelled turn rejects too, but you asked for that.
 				if (abort.signal.aborted) {
@@ -538,149 +612,21 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 					},
 				]);
 			} finally {
+				activeCommandNameRef.current = null;
 				setIsThinking(false);
+				setIsRunningCommand(false);
 				setIsCancelling(false);
-				setTurnStartedAt(null);
 				setRunningTool(null);
+				setTurnStartedAt(null);
 				turnAbortRef.current = null;
 			}
 		},
-		[append, session],
-	);
-
-	const handleCommandResult = useCallback(
-		async (name: string, result: SlashCommandResult): Promise<void> => {
-			if (result.type === "exit") {
-				if (result.content !== undefined && result.content.length > 0) {
-					appendNotice("info", null, result.content);
-				}
-
-				exit();
-				return;
-			}
-
-			if (result.type === "message") {
-				// Compaction already printed its own row, in the same grammar as
-				// every other slow thing; repeating it as text says it twice.
-				if (name === "compact" && compactionReportedRef.current) {
-					return;
-				}
-
-				if (name === "reload" && configReloadReportedRef.current) {
-					return;
-				}
-
-				// `/context` is the one command whose answer is a picture, so the
-				// meter is rendered instead of its text.
-				if (name === "context" && session !== null) {
-					append([
-						{
-							kind: "context",
-							meter: describeUsage(
-								session.runtime.getContextUsage({ kind: "cli" }),
-							),
-						},
-					]);
-					return;
-				}
-
-				appendNotice("info", null, result.content);
-				return;
-			}
-
-			if (result.type === "submit") {
-				if (result.notice !== undefined && result.notice.length > 0) {
-					appendNotice("info", null, result.notice);
-				}
-
-				await runTurn(result.content);
-				return;
-			}
-
-			await runTurn(result.input);
-		},
-		[append, appendNotice, exit, runTurn, session],
-	);
-
-	const submit = useCallback(
-		async (raw: string): Promise<void> => {
-			const text = raw.trim();
-
-			if (text.length === 0 || session === null) {
-				return;
-			}
-
-			if (["q", "quit", "exit"].includes(text.toLowerCase())) {
-				exit();
-				return;
-			}
-
-			compactionReportedRef.current = false;
-			configReloadReportedRef.current = false;
-			setIsRunningCommand(true);
-			setTurnStartedAt(Date.now());
-
-			let dispatched: SlashCommandDispatchResult;
-
-			try {
-				dispatched = await commandRegistry.dispatch(text, {
-					historySession: session.historySession,
-					skills: session.skills,
-					getMessageCount: () => session.runtime.getMessageCount(),
-					getContextUsage: () =>
-						session.runtime.getContextUsage({ kind: "cli" }),
-					compactContext: () =>
-						session.runtime.compactContext({ source: { kind: "cli" } }),
-					reloadConfiguration: () =>
-						session.runtime.reloadConfiguration({
-							force: true,
-							source: { kind: "cli" },
-						}),
-				});
-			} finally {
-				// Commands never overlap a turn: the queue only drains once the
-				// previous turn has finished.
-				setIsRunningCommand(false);
-				setRunningTool(null);
-				setTurnStartedAt(null);
-			}
-
-			if (dispatched.handled) {
-				await handleCommandResult(
-					text.slice(1).split(/\s+/)[0] ?? "",
-					dispatched.result,
-				);
-				return;
-			}
-
-			if (text.startsWith("/")) {
-				const closest = findClosestCommand(commandOptions, text);
-
-				appendNotice(
-					"info",
-					null,
-					closest === null
-						? `no command called ${text}`
-						: `no command called ${text}\ndid you mean /${closest.name}?`,
-				);
-			}
-
-			await runTurn(text);
-		},
-		[
-			appendNotice,
-			commandOptions,
-			commandRegistry,
-			exit,
-			handleCommandResult,
-			runTurn,
-			session,
-		],
+		[append, exit, interactor, renderInteractionMessage],
 	);
 
 	// Anything typed while Sonny is busy sends itself once the turn ends.
 	useEffect(() => {
-		if (isThinking || queue.length === 0 || session === null) {
+		if (isBusy || queue.length === 0 || session === null) {
 			return;
 		}
 
@@ -690,7 +636,7 @@ export function ChatApp({ eventBus, createSession }: ChatAppProps) {
 		if (next !== undefined) {
 			void submit(next);
 		}
-	}, [isThinking, queue, session, submit]);
+	}, [isBusy, queue, session, submit]);
 
 	const resolveApproval = useCallback(
 		(decision: ToolApprovalDecision): void => {
