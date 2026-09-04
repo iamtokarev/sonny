@@ -15,6 +15,11 @@ export interface ChannelTarget {
 	readonly threadId?: string;
 }
 
+export type ChannelTargetSource = Pick<
+	ChannelSource,
+	"channel" | "conversationId" | "threadId"
+>;
+
 export type ChannelEvent =
 	| {
 			readonly type: "message";
@@ -47,7 +52,7 @@ export interface ChannelAdapter {
 	send(output: ChannelOutput): Promise<void>;
 }
 
-export function toChannelTarget(source: ChannelSource): ChannelTarget {
+export function toChannelTarget(source: ChannelTargetSource): ChannelTarget {
 	return {
 		channel: source.channel,
 		conversationId: source.conversationId,

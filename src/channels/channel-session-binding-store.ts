@@ -54,12 +54,12 @@ const ChannelSessionBindingsSchema = z
 		}
 	});
 
-type ChannelSessionKeyParts = Pick<
+export type ChannelSessionKeySource = Pick<
 	ChannelSource,
 	"channel" | "conversationKind" | "conversationId" | "threadId"
 >;
 
-function createBindingKey(source: ChannelSessionKeyParts): string {
+function createBindingKey(source: ChannelSessionKeySource): string {
 	return [
 		source.channel,
 		source.conversationKind,
@@ -70,7 +70,9 @@ function createBindingKey(source: ChannelSessionKeyParts): string {
 		.join(":");
 }
 
-export function createChannelSessionKey(source: ChannelSource): string {
+export function createChannelSessionKey(
+	source: ChannelSessionKeySource,
+): string {
 	return createBindingKey(source);
 }
 
