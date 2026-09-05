@@ -113,6 +113,36 @@ function message(
 	};
 }
 
+function action(
+	conversationId: string,
+	value: string,
+	overrides: Partial<ChannelSource> = {},
+): Extract<ChannelEvent, { type: "action" }> {
+	return {
+		type: "action",
+		source: source(conversationId, {
+			messageId: `action-${conversationId}`,
+			...overrides,
+		}),
+		value,
+	};
+}
+
+function outputAction(
+	output: ChannelOutput,
+	label: "Approve" | "Deny",
+): string {
+	const candidate = output.actions?.find(
+		(channelAction) => channelAction.label === label,
+	);
+
+	if (!candidate) {
+		throw new Error(`Missing ${label} action.`);
+	}
+
+	return candidate.value;
+}
+
 function sessionResult(
 	sessionId: string,
 	runTurn: (input: AgentTurnInput) => Promise<AgentTurnResult>,
@@ -179,11 +209,16 @@ async function createHarness(
 		readonly runTurn?: (
 			input: AgentTurnInput,
 			sessionId: string,
+			approvals: ChannelApprovalBroker,
 		) => Promise<AgentTurnResult>;
 	} = {},
 ): Promise<GatewayHarness> {
 	const adapters = options.adapters ?? [new FakeAdapter("telegram")];
 	const adapter = adapters[0] as FakeAdapter;
+	const delivery = new ChannelDelivery(adapters);
+	const approvals = new ChannelApprovalBroker((output) =>
+		delivery.send(output),
+	);
 	const workspace = await mkdtemp(join(tmpdir(), "sonny-channel-gateway-"));
 	const bindings = new ChannelSessionBindingStore(
 		join(workspace, ".history", "channels", "bindings.json"),
@@ -219,7 +254,7 @@ async function createHarness(
 		return sessionResult(sessionId, async (input) => {
 			turnInputs.push(input);
 			return (
-				options.runTurn?.(input, sessionId) ?? {
+				options.runTurn?.(input, sessionId, approvals) ?? {
 					turnId: "turn-1",
 					content: `Reply to ${input.content}`,
 				}
@@ -230,10 +265,6 @@ async function createHarness(
 		bindings,
 		createSession,
 		commands,
-	);
-	const delivery = new ChannelDelivery(adapters);
-	const approvals = new ChannelApprovalBroker((output) =>
-		delivery.send(output),
 	);
 	const gateway = new ChannelGateway({
 		adapters,
@@ -259,6 +290,38 @@ async function createHarness(
 			controller.abort();
 			await run;
 		},
+	};
+}
+
+function approvalRunTurn(
+	approvalRequested: { resolve(value: undefined): void },
+	onDecision?: (approved: boolean) => void,
+): (
+	input: AgentTurnInput,
+	sessionId: string,
+	approvals: ChannelApprovalBroker,
+) => Promise<AgentTurnResult> {
+	return async (input, sessionId, approvals) => {
+		const decision = approvals.request({
+			toolCallId: "call-1",
+			toolName: "bash",
+			description: "Run a command",
+			parameters: { command: "bun test" },
+			turn: {
+				sessionId,
+				turnId: "turn-1",
+				source: input.source,
+				signal: input.signal,
+			},
+		});
+		approvalRequested.resolve(undefined);
+		const result = await decision;
+		onDecision?.(result.approved);
+
+		return {
+			turnId: "turn-1",
+			content: result.approved ? "Tool approved." : "Tool denied.",
+		};
 	};
 }
 
@@ -475,5 +538,118 @@ describe("ChannelGateway text handling", () => {
 		);
 		expect(harness.adapter.sent[0]?.text).not.toContain("credential-secret");
 		await harness.stop();
+	});
+});
+
+describe("ChannelGateway approval actions", () => {
+	test.each([
+		["Approve", true],
+		["Deny", false],
+	] as const)("lets the %s action resolve the waiting turn without entering its queue", async (label, approved) => {
+		const approvalRequested = deferred<void>();
+		const harness = await createHarness({
+			runTurn: approvalRunTurn(approvalRequested),
+		});
+		const waitingTurn = harness.adapter.emit(
+			message("conversation-1", "Use a tool"),
+		);
+		await approvalRequested.promise;
+		const approvalOutput = harness.adapter.sent[0] as ChannelOutput;
+		const value = outputAction(approvalOutput, label);
+
+		await harness.adapter.emit(action("conversation-1", value));
+		await waitingTurn;
+
+		expect(harness.turnInputs).toHaveLength(1);
+		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+			approvalOutput.text,
+			approved ? "Tool approved." : "Tool denied.",
+		]);
+		await harness.stop();
+	});
+
+	test("applies the message access check to approval actions", async () => {
+		const approvalRequested = deferred<void>();
+		const checkedUsers: string[] = [];
+		const harness = await createHarness({
+			isAllowed: (candidate) => {
+				checkedUsers.push(candidate.userId);
+				return candidate.userId === "user-1";
+			},
+			runTurn: approvalRunTurn(approvalRequested),
+		});
+		const waitingTurn = harness.adapter.emit(
+			message("conversation-1", "Use a tool"),
+		);
+		await approvalRequested.promise;
+		const value = outputAction(
+			harness.adapter.sent[0] as ChannelOutput,
+			"Approve",
+		);
+
+		await harness.adapter.emit(
+			action("conversation-1", value, { userId: "user-2" }),
+		);
+		await Bun.sleep(0);
+		expect(harness.adapter.sent).toHaveLength(1);
+
+		await harness.adapter.emit(action("conversation-1", value));
+		await waitingTurn;
+		expect(checkedUsers).toEqual(["user-1", "user-2", "user-1"]);
+		expect(harness.adapter.sent.at(-1)?.text).toBe("Tool approved.");
+		await harness.stop();
+	});
+
+	test("mismatched, unrelated, and duplicate actions cannot resolve the wrong turn", async () => {
+		const approvalRequested = deferred<void>();
+		const harness = await createHarness({
+			runTurn: approvalRunTurn(approvalRequested),
+		});
+		const waitingTurn = harness.adapter.emit(
+			message("conversation-1", "Use a tool"),
+		);
+		await approvalRequested.promise;
+		const approvalOutput = harness.adapter.sent[0] as ChannelOutput;
+		const value = outputAction(approvalOutput, "Approve");
+
+		await harness.adapter.emit(action("conversation-2", value));
+		await harness.adapter.emit(
+			action("conversation-1", value, { userId: "user-2" }),
+		);
+		await harness.adapter.emit(action("conversation-1", "settings:open"));
+		await Bun.sleep(0);
+		expect(harness.adapter.sent).toHaveLength(1);
+		expect(harness.turnInputs).toHaveLength(1);
+
+		await harness.adapter.emit(action("conversation-1", value));
+		await waitingTurn;
+		await harness.adapter.emit(action("conversation-1", value));
+		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+			approvalOutput.text,
+			"Tool approved.",
+		]);
+		expect(harness.turnInputs).toHaveLength(1);
+		await harness.stop();
+	});
+
+	test("gateway shutdown denies a pending approval and unblocks its turn", async () => {
+		const approvalRequested = deferred<void>();
+		const observedDecision = deferred<boolean>();
+		const harness = await createHarness({
+			runTurn: approvalRunTurn(approvalRequested, (approved) =>
+				observedDecision.resolve(approved),
+			),
+		});
+		const waitingTurn = harness.adapter.emit(
+			message("conversation-1", "Use a tool"),
+		);
+		await approvalRequested.promise;
+
+		harness.controller.abort();
+		await harness.run;
+		await waitingTurn;
+
+		await expect(observedDecision.promise).resolves.toBe(false);
+		expect(harness.adapter.stopped).toBe(true);
 	});
 });
