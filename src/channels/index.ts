@@ -6,3 +6,4 @@ export * from "./channel-gateway";
 export * from "./channel-prompt";
 export * from "./channel-session-binding-store";
 export * from "./channel-session-directory";
+export * from "./telegram";
