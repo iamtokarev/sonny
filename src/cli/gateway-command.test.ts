@@ -78,6 +78,47 @@ function createConfigStore(): RuntimeConfigStore {
 }
 
 describe("runGatewayCommand", () => {
+	test("logs stopped and removes listeners only after gateway drain", async () => {
+		const signals = new FakeSignals();
+		const drain = deferred<void>();
+		const started = deferred<void>();
+		const records: string[] = [];
+		const logger: Logger = {
+			debug: () => {},
+			info: (message) => records.push(message),
+			warn: () => {},
+			error: () => {},
+		};
+		const execution = runGatewayCommand({
+			configStore: createConfigStore(),
+			signals,
+			logger,
+			createGateway: async () => ({
+				run: async (signal) => {
+					started.resolve(undefined);
+					await new Promise<void>((resolve) =>
+						signal.addEventListener("abort", () => resolve(), { once: true }),
+					);
+					await drain.promise;
+				},
+			}),
+		});
+		await started.promise;
+		signals.emit("SIGTERM");
+		await Promise.resolve();
+
+		expect(records).toEqual(["channel.gateway.started"]);
+		expect(signals.listenerCount("SIGINT")).toBe(1);
+		drain.resolve(undefined);
+		await execution;
+		expect(records).toEqual([
+			"channel.gateway.started",
+			"channel.gateway.stopped",
+		]);
+		expect(signals.listenerCount("SIGINT")).toBe(0);
+		expect(signals.listenerCount("SIGTERM")).toBe(0);
+	});
+
 	test.each([
 		"SIGINT",
 		"SIGTERM",

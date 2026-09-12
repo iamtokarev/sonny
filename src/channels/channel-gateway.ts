@@ -5,6 +5,7 @@ import type { ChannelAdapter, ChannelEvent, ChannelSource } from "./channel";
 import { toChannelTarget } from "./channel";
 import type { ChannelApprovalBroker } from "./channel-approval-broker";
 import type { ChannelDelivery } from "./channel-delivery";
+import { createChannelSessionKey } from "./channel-session-binding-store";
 import type {
 	ChannelConversationSession,
 	ChannelSessionDirectory,
@@ -24,11 +25,21 @@ export interface ChannelGatewayOptions {
 }
 
 export class ChannelGateway {
+	private readonly handlers = new Set<Promise<void>>();
+	private accepting = false;
+	private readonly conversationTails = new Map<string, Promise<void>>();
+
 	constructor(private readonly options: ChannelGatewayOptions) {}
 
 	async run(signal: AbortSignal): Promise<void> {
 		const lifecycle = new AbortController();
-		const stop = () => lifecycle.abort();
+		let transportFailure: unknown;
+		const stop = () => {
+			this.accepting = false;
+			lifecycle.abort();
+			this.options.approvals.cancelAll("Gateway stopped.");
+		};
+		this.accepting = !signal.aborted;
 
 		if (signal.aborted) {
 			lifecycle.abort();
@@ -36,22 +47,57 @@ export class ChannelGateway {
 			signal.addEventListener("abort", stop, { once: true });
 		}
 
+		const fail = (error: unknown) => {
+			transportFailure ??= error;
+			stop();
+		};
 		const runs = this.options.adapters.map((adapter) =>
 			Promise.resolve().then(() =>
 				adapter.run(
-					(event) => this.handleEvent(adapter.name, event, lifecycle.signal),
+					(event) => {
+						if (!this.accepting) {
+							return Promise.resolve();
+						}
+
+						const handler = this.handleEvent(
+							adapter.name,
+							event,
+							lifecycle.signal,
+						);
+						this.handlers.add(handler);
+						void handler.then(
+							() => this.handlers.delete(handler),
+							() => this.handlers.delete(handler),
+						);
+						return handler;
+					},
 					lifecycle.signal,
+					fail,
 				),
 			),
 		);
 
+		let runFailure: unknown;
 		try {
 			await Promise.all(runs);
+		} catch (error) {
+			runFailure = error;
 		} finally {
-			lifecycle.abort();
-			this.options.approvals.cancelAll("Gateway stopped.");
+			stop();
 			await Promise.allSettled(runs);
+			while (this.handlers.size > 0) {
+				await Promise.allSettled([...this.handlers]);
+			}
+			await this.options.approvals.drain();
 			signal.removeEventListener("abort", stop);
+		}
+
+		if (transportFailure !== undefined) {
+			throw transportFailure;
+		}
+
+		if (runFailure !== undefined) {
+			throw runFailure;
 		}
 	}
 
@@ -60,6 +106,9 @@ export class ChannelGateway {
 		event: ChannelEvent,
 		signal: AbortSignal,
 	): Promise<void> {
+		if (signal.aborted) {
+			return;
+		}
 		if (event.source.channel !== adapterName) {
 			throw new Error(
 				`Adapter ${adapterName} emitted an event for another channel.`,
@@ -85,19 +134,45 @@ export class ChannelGateway {
 			return;
 		}
 
-		await this.handleMessage(event, signal);
+		await this.enqueueMessage(event, signal);
+	}
+
+	private enqueueMessage(
+		event: Extract<ChannelEvent, { type: "message" }>,
+		signal: AbortSignal,
+	): Promise<void> {
+		const key = createChannelSessionKey(event.source);
+		const previous = this.conversationTails.get(key) ?? Promise.resolve();
+		const operation = previous
+			.catch(() => undefined)
+			.then(() => this.handleMessage(event, signal));
+
+		this.conversationTails.set(key, operation);
+
+		return operation.finally(() => {
+			if (this.conversationTails.get(key) === operation) {
+				this.conversationTails.delete(key);
+			}
+		});
 	}
 
 	private async handleMessage(
 		event: Extract<ChannelEvent, { type: "message" }>,
 		signal: AbortSignal,
 	): Promise<void> {
+		if (signal.aborted) {
+			return;
+		}
+
 		const target = toChannelTarget(event.source);
 		let interaction: ChannelConversationSession;
 		let result: SessionInteractionResult;
 
 		try {
 			interaction = await this.options.sessions.getOrCreate(event.source);
+			if (signal.aborted) {
+				return;
+			}
 			const source: RuntimeSource = {
 				kind: "channel",
 				channel: event.source.channel,
@@ -112,6 +187,9 @@ export class ChannelGateway {
 				signal,
 			});
 		} catch (error) {
+			if (signal.aborted) {
+				return;
+			}
 			logger.error("channel.interaction.failed", {
 				channel: event.source.channel,
 				error: error instanceof Error ? error.message : String(error),
@@ -129,6 +207,9 @@ export class ChannelGateway {
 		}
 
 		for (const message of result.messages) {
+			if (signal.aborted) {
+				return;
+			}
 			await this.options.delivery.send({
 				target,
 				text: message.content,

@@ -65,6 +65,7 @@ function approvalOutput(
 
 export class ChannelApprovalBroker {
 	private readonly pending = new Map<string, PendingApproval>();
+	private readonly deliveries = new Set<Promise<void>>();
 
 	constructor(
 		private readonly deliver: DeliverChannelOutput,
@@ -121,9 +122,11 @@ export class ChannelApprovalBroker {
 				return;
 			}
 
-			void delivery.catch(() => {
+			const tracked = delivery.catch(() => {
 				this.settle(id, { approved: false, reason: deliveryFailureReason });
 			});
+			this.deliveries.add(tracked);
+			void tracked.finally(() => this.deliveries.delete(tracked));
 		});
 	}
 
@@ -164,6 +167,12 @@ export class ChannelApprovalBroker {
 	cancelAll(reason: string): void {
 		for (const id of [...this.pending.keys()]) {
 			this.settle(id, { approved: false, reason });
+		}
+	}
+
+	async drain(): Promise<void> {
+		while (this.deliveries.size > 0) {
+			await Promise.allSettled([...this.deliveries]);
 		}
 	}
 

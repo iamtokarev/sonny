@@ -45,10 +45,20 @@ export interface ChannelOutput {
 }
 
 export type ChannelEventHandler = (event: ChannelEvent) => Promise<void>;
+export type ChannelAdapterFailureHandler = (error: unknown) => void;
 
 export interface ChannelAdapter {
 	readonly name: string;
-	run(handler: ChannelEventHandler, signal: AbortSignal): Promise<void>;
+	/**
+	 * A fatal transport failure must call onFailure before waiting for owned
+	 * handlers to drain. This lets the gateway cancel model and approval waits;
+	 * run still rejects with the transport failure after cleanup completes.
+	 */
+	run(
+		handler: ChannelEventHandler,
+		signal: AbortSignal,
+		onFailure?: ChannelAdapterFailureHandler,
+	): Promise<void>;
 	send(output: ChannelOutput): Promise<void>;
 }
 

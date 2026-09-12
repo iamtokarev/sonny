@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { RunnerHandle } from "@grammyjs/runner";
-import type { Bot } from "grammy";
+import { type RunnerHandle, run } from "@grammyjs/runner";
+import { Bot } from "grammy";
 import type { ChannelEvent, ChannelOutput } from "../channel";
 import { ChannelDeliveryError } from "../channel-errors";
 import {
@@ -244,6 +244,35 @@ describe("TelegramAdapter update normalization", () => {
 });
 
 describe("TelegramAdapter callback actions", () => {
+	test("shutdown waits for an issued callback acknowledgement", async () => {
+		const acknowledgement = deferred<void>();
+		let handled = false;
+		const running = await startAdapter(async () => {
+			handled = true;
+		});
+		const emitted = running.bot.emit(
+			"callback_query:data",
+			callbackContext({
+				answerCallbackQuery: async () => acknowledgement.promise,
+			}),
+		);
+		await Promise.resolve();
+		let stopped = false;
+		void running.run.then(() => {
+			stopped = true;
+		});
+
+		running.controller.abort();
+		await Promise.resolve();
+		expect(stopped).toBe(false);
+		expect(handled).toBe(false);
+		acknowledgement.resolve(undefined);
+		await emitted;
+		await running.run;
+		expect(stopped).toBe(true);
+		expect(handled).toBe(false);
+	});
+
 	test("acknowledges a callback before waiting for gateway work", async () => {
 		const order: string[] = [];
 		const release = deferred<void>();
@@ -427,6 +456,33 @@ describe("TelegramAdapter delivery", () => {
 		]);
 	});
 
+	test("finishes an issued chunk but starts no later chunk after stop", async () => {
+		const firstSend = deferred<void>();
+		const bot = new FakeBot();
+		bot.api.sendMessage = async (chatId, text, options) => {
+			bot.sends.push({ chatId, text, options });
+			await firstSend.promise;
+			return {};
+		};
+		const { adapter, runner } = createAdapter({ bot });
+		const controller = new AbortController();
+		const run = adapter.run(async () => {}, controller.signal);
+		await Promise.resolve();
+		const send = adapter.send({
+			target: { channel: "telegram", conversationId: "42" },
+			text: "a".repeat(4_001),
+		});
+		await Promise.resolve();
+		expect(bot.sends).toHaveLength(1);
+
+		controller.abort();
+		firstSend.resolve(undefined);
+		await send;
+		await run;
+		expect(runner.isRunning()).toBe(false);
+		expect(bot.sends).toHaveLength(1);
+	});
+
 	test("rejects wrong-channel output without sending", async () => {
 		const { adapter, bot } = createAdapter();
 
@@ -463,6 +519,193 @@ describe("TelegramAdapter delivery", () => {
 });
 
 describe("TelegramAdapter lifecycle", () => {
+	test("does not start polling when its signal is already aborted", async () => {
+		const bot = new FakeBot();
+		let starts = 0;
+		const adapter = new TelegramAdapter(config, bot as unknown as Bot, () => {
+			starts += 1;
+			return new FakeRunner();
+		});
+		const controller = new AbortController();
+		controller.abort();
+
+		await adapter.run(async () => {}, controller.signal);
+		expect(starts).toBe(0);
+		expect(bot.hasHandler("message:text")).toBe(false);
+	});
+
+	test("waits for active handlers after the runner has stopped", async () => {
+		const release = deferred<void>();
+		const running = await startAdapter(async () => release.promise);
+		const emitted = running.bot.emit("message:text", privateTextContext());
+		await Promise.resolve();
+		let settled = false;
+		void running.run.then(() => {
+			settled = true;
+		});
+
+		running.controller.abort();
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		release.resolve(undefined);
+		await emitted;
+		await running.run;
+		expect(settled).toBe(true);
+	});
+
+	test("real grammY runner stop waits for application handler cleanup", async () => {
+		const handlerStarted = deferred<void>();
+		const releaseHandler = deferred<void>();
+		const pollStarted = deferred<void>();
+		let getUpdatesCalls = 0;
+		const bot = new Bot(config.botToken, {
+			botInfo: {
+				id: 123,
+				is_bot: true,
+				first_name: "Sonny",
+				username: "sonny_test_bot",
+				can_join_groups: false,
+				can_read_all_group_messages: false,
+				supports_inline_queries: false,
+				can_connect_to_business: false,
+				has_main_web_app: false,
+				has_topics_enabled: false,
+				allows_users_to_create_topics: false,
+				can_manage_bots: false,
+				supports_join_request_queries: false,
+			},
+		});
+		bot.api.config.use(async (_previous, method, _payload, signal) => {
+			expect(String(method)).toBe("getUpdates");
+			getUpdatesCalls += 1;
+			if (getUpdatesCalls === 1) {
+				return {
+					ok: true,
+					result: [
+						{
+							update_id: 1,
+							message: {
+								message_id: 9,
+								date: 0,
+								chat: { id: 42, type: "private", first_name: "User" },
+								from: { id: 7, is_bot: false, first_name: "User" },
+								text: "Hello",
+							},
+						},
+					],
+				} as never;
+			}
+
+			pollStarted.resolve(undefined);
+			return await new Promise((_, reject) => {
+				signal?.addEventListener("abort", () => reject(new Error("stopped")), {
+					once: true,
+				});
+			});
+		});
+		const adapter = new TelegramAdapter(config, bot);
+		const controller = new AbortController();
+		const execution = adapter.run(async () => {
+			handlerStarted.resolve(undefined);
+			await releaseHandler.promise;
+		}, controller.signal);
+		await Promise.all([handlerStarted.promise, pollStarted.promise]);
+		let settled = false;
+		void execution.then(() => {
+			settled = true;
+		});
+
+		controller.abort();
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		releaseHandler.resolve(undefined);
+		await execution;
+		expect(settled).toBe(true);
+	});
+
+	test("real runner polling failure cancels and drains active work before preserving the error", async () => {
+		const failure = Object.assign(new Error("polling failed"), {
+			error_code: 401,
+		});
+		const handlerStarted = deferred<void>();
+		const cancellationObserved = deferred<void>();
+		const releaseCleanup = deferred<void>();
+		const handlerAbort = new AbortController();
+		let getUpdatesCalls = 0;
+		const bot = new Bot(config.botToken, {
+			botInfo: {
+				id: 123,
+				is_bot: true,
+				first_name: "Sonny",
+				username: "sonny_test_bot",
+				can_join_groups: false,
+				can_read_all_group_messages: false,
+				supports_inline_queries: false,
+				can_connect_to_business: false,
+				has_main_web_app: false,
+				has_topics_enabled: false,
+				allows_users_to_create_topics: false,
+				can_manage_bots: false,
+				supports_join_request_queries: false,
+			},
+		});
+		bot.api.config.use(async () => {
+			getUpdatesCalls += 1;
+			if (getUpdatesCalls === 1) {
+				return {
+					ok: true,
+					result: [
+						{
+							update_id: 1,
+							message: {
+								message_id: 9,
+								date: 0,
+								chat: { id: 42, type: "private", first_name: "User" },
+								from: { id: 7, is_bot: false, first_name: "User" },
+								text: "Hello",
+							},
+						},
+					],
+				} as never;
+			}
+			throw failure;
+		});
+		const adapter = new TelegramAdapter(config, bot, (candidate) =>
+			run(candidate, { runner: { silent: true } }),
+		);
+		const execution = adapter.run(
+			async () => {
+				handlerStarted.resolve(undefined);
+				await new Promise<void>((resolve) =>
+					handlerAbort.signal.addEventListener(
+						"abort",
+						() => {
+							cancellationObserved.resolve(undefined);
+							resolve();
+						},
+						{ once: true },
+					),
+				);
+				await releaseCleanup.promise;
+			},
+			new AbortController().signal,
+			(error) => {
+				expect(error).toBe(failure);
+				handlerAbort.abort();
+			},
+		);
+		await Promise.all([handlerStarted.promise, cancellationObserved.promise]);
+		let settled = false;
+		void execution.catch(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		expect(settled).toBe(false);
+
+		releaseCleanup.resolve(undefined);
+		await expect(execution).rejects.toBe(failure);
+	});
+
 	test("aborting stops concurrent polling exactly once", async () => {
 		const running = await startAdapter();
 

@@ -6,6 +6,18 @@ import {
 	type DeliverChannelOutput,
 } from "./channel-approval-broker";
 
+function deferred<T>() {
+	let resolve: ((value: T) => void) | undefined;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+
+	return {
+		promise,
+		resolve: (value: T) => resolve?.(value),
+	};
+}
+
 const channelSource = {
 	kind: "channel",
 	channel: "telegram",
@@ -330,5 +342,27 @@ describe("ChannelApprovalBroker", () => {
 				}),
 			).toBe(true);
 		}
+	});
+
+	test("drain waits for a detached approval delivery after cancellation", async () => {
+		const delivery = deferred<void>();
+		const broker = new ChannelApprovalBroker(() => delivery.promise);
+		const decision = broker.request(request());
+		let drained = false;
+
+		broker.cancelAll("Gateway stopped.");
+		await expect(decision).resolves.toEqual({
+			approved: false,
+			reason: "Gateway stopped.",
+		});
+		const drain = broker.drain().then(() => {
+			drained = true;
+		});
+		await Promise.resolve();
+		expect(drained).toBe(false);
+
+		delivery.resolve(undefined);
+		await drain;
+		expect(drained).toBe(true);
 	});
 });

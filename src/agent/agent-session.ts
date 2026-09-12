@@ -9,7 +9,7 @@ import type { ChatMessage, ToolCall, ToolSchema } from "../domain";
 import type { RuntimeSource, TurnContext } from "../events";
 import type { HistoryRecorderSink } from "../history";
 import type { LLMChatResult } from "../llm";
-import { getToolCompletionStatus } from "../tools/tool";
+import { getToolCompletionStatus, type ToolResult } from "../tools/tool";
 import type { ToolExecutor } from "../tools/tool-executor";
 import type { ToolRegistry } from "../tools/tool-registry";
 import { createLogger } from "../utils/logger";
@@ -99,6 +99,7 @@ export class AgentSession {
 					turnContext.source,
 				);
 				await this.prepareContext(toolSchemas, turnContext, systemPrompt);
+				turnContext.signal?.throwIfAborted();
 				const messages = this.state.buildMessages(systemPrompt);
 
 				logger.info("llm.turn.started", {
@@ -171,10 +172,15 @@ export class AgentSession {
 						turnContext.signal.throwIfAborted();
 					}
 
-					const toolResult = await this.toolExecutor.execute(
-						toolCall,
-						turnContext,
-					);
+					let toolResult: ToolResult;
+					try {
+						toolResult = await this.toolExecutor.execute(toolCall, turnContext);
+					} catch (error) {
+						if (turnContext.signal?.aborted) {
+							this.recordCancelledToolCalls(response.toolCalls.slice(index));
+						}
+						throw error;
+					}
 
 					this.state.addMessage({
 						role: "tool",

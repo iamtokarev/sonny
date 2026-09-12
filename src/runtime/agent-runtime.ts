@@ -120,9 +120,10 @@ export class AgentRuntime {
 			inputLength: input.content.length,
 		});
 		const startedAt = performance.now();
-		await this.refreshConfiguration(false, turnContext);
 
 		try {
+			await this.refreshConfiguration(false, turnContext);
+			input.signal?.throwIfAborted();
 			const content = await this.options.session.chat(
 				input.content,
 				turnContext,

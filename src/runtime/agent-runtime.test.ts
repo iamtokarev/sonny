@@ -248,6 +248,36 @@ describe("AgentRuntime", () => {
 		]);
 	});
 
+	test("does not start chat when cancellation arrives during refresh", async () => {
+		const eventBus = new InMemoryRuntimeEventBus();
+		const refresh = createDeferred<RuntimeConfigurationResult>();
+		const abort = new AbortController();
+		let chatCalled = false;
+		const runtime = createRuntime(
+			{
+				refreshConfiguration: async () => refresh.promise,
+				async chat() {
+					chatCalled = true;
+					return "unreachable";
+				},
+			},
+			eventBus,
+		);
+		const turn = runtime.runTurn({
+			...createInput("Hello"),
+			signal: abort.signal,
+		});
+		abort.abort();
+		refresh.resolve({
+			status: "unchanged",
+			revision: 1,
+			info: { model: "openai/model-a", toolNames: [] },
+		});
+
+		await expect(turn).rejects.toHaveProperty("name", "AbortError");
+		expect(chatCalled).toBe(false);
+	});
+
 	test("passes the caller's signal to the session so a turn can stop early", async () => {
 		const eventBus = new InMemoryRuntimeEventBus();
 		const abort = new AbortController();

@@ -42,15 +42,29 @@ function deferred<T>() {
 class FakeAdapter implements ChannelAdapter {
 	readonly sent: ChannelOutput[] = [];
 	readonly started = deferred<void>();
+	readonly sendStarted = deferred<void>();
+	sendGate?: Promise<void>;
 	private readonly completion = deferred<void>();
 	private handler?: ChannelEventHandler;
 	private lifecycleSignal?: AbortSignal;
+	private onFailure?: (error: unknown) => void;
 
-	constructor(readonly name: string) {}
+	constructor(
+		readonly name: string,
+		private readonly deliver: (
+			output: ChannelOutput,
+		) => Promise<void> = async () => {},
+		private readonly abortFailure?: Error,
+	) {}
 
-	run(handler: ChannelEventHandler, signal: AbortSignal): Promise<void> {
+	run(
+		handler: ChannelEventHandler,
+		signal: AbortSignal,
+		onFailure?: (error: unknown) => void,
+	): Promise<void> {
 		this.handler = handler;
 		this.lifecycleSignal = signal;
+		this.onFailure = onFailure;
 		this.started.resolve(undefined);
 
 		if (signal.aborted) {
@@ -58,7 +72,10 @@ class FakeAdapter implements ChannelAdapter {
 		} else {
 			signal.addEventListener(
 				"abort",
-				() => this.completion.resolve(undefined),
+				() =>
+					this.abortFailure === undefined
+						? this.completion.resolve(undefined)
+						: this.completion.reject(this.abortFailure),
 				{ once: true },
 			);
 		}
@@ -68,6 +85,9 @@ class FakeAdapter implements ChannelAdapter {
 
 	async send(output: ChannelOutput): Promise<void> {
 		this.sent.push(output);
+		this.sendStarted.resolve(undefined);
+		await this.sendGate;
+		await this.deliver(output);
 	}
 
 	emit(event: ChannelEvent): Promise<void> {
@@ -79,6 +99,15 @@ class FakeAdapter implements ChannelAdapter {
 	}
 
 	fail(error: Error): void {
+		this.completion.reject(error);
+		this.onFailure?.(error);
+	}
+
+	reportFailure(error: Error): void {
+		this.onFailure?.(error);
+	}
+
+	finishFailure(error: Error): void {
 		this.completion.reject(error);
 	}
 
@@ -195,6 +224,7 @@ interface GatewayHarness {
 	readonly adapters: readonly FakeAdapter[];
 	readonly bindings: ChannelSessionBindingStore;
 	readonly createCalls: Array<{ resumeSessionId?: string }>;
+	readonly acquisitionCalls: ChannelSource[];
 	readonly turnInputs: AgentTurnInput[];
 	readonly gateway: ChannelGateway;
 	readonly controller: AbortController;
@@ -211,6 +241,7 @@ async function createHarness(
 			sessionId: string,
 			approvals: ChannelApprovalBroker,
 		) => Promise<AgentTurnResult>;
+		readonly beforeCreateSession?: () => Promise<void>;
 	} = {},
 ): Promise<GatewayHarness> {
 	const adapters = options.adapters ?? [new FakeAdapter("telegram")];
@@ -248,6 +279,7 @@ async function createHarness(
 	let nextSession = 1;
 	const createSession: CreateChannelSession = async (createOptions) => {
 		createCalls.push(createOptions);
+		await options.beforeCreateSession?.();
 		const sessionId =
 			createOptions.resumeSessionId ?? `session-${nextSession++}`;
 
@@ -266,6 +298,12 @@ async function createHarness(
 		createSession,
 		commands,
 	);
+	const acquisitionCalls: ChannelSource[] = [];
+	const getOrCreate = sessions.getOrCreate.bind(sessions);
+	sessions.getOrCreate = (candidate) => {
+		acquisitionCalls.push(candidate);
+		return getOrCreate(candidate);
+	};
 	const gateway = new ChannelGateway({
 		adapters,
 		delivery,
@@ -282,6 +320,7 @@ async function createHarness(
 		adapters,
 		bindings,
 		createCalls,
+		acquisitionCalls,
 		turnInputs,
 		gateway,
 		controller,
@@ -344,6 +383,88 @@ describe("ChannelGateway lifecycle", () => {
 
 		await expect(harness.run).rejects.toBe(failure);
 		expect(adapters[1]?.stopped).toBe(true);
+	});
+
+	test("waits for an active turn and suppresses its obsolete reply", async () => {
+		const turnStarted = deferred<void>();
+		const releaseTurn = deferred<void>();
+		let turnSignal: AbortSignal | undefined;
+		const harness = await createHarness({
+			runTurn: async (input) => {
+				turnSignal = input.signal;
+				turnStarted.resolve(undefined);
+				await releaseTurn.promise;
+				return { turnId: "turn-1", content: "obsolete reply" };
+			},
+		});
+		const emitted = harness.adapter.emit(message("conversation-1", "Hello"));
+		await turnStarted.promise;
+		let stopped = false;
+		const stop = harness.stop().then(() => {
+			stopped = true;
+		});
+		await Promise.resolve();
+
+		expect(turnSignal?.aborted).toBe(true);
+		expect(stopped).toBe(false);
+		releaseTurn.resolve(undefined);
+		await emitted;
+		await stop;
+		expect(harness.adapter.sent).toHaveLength(0);
+	});
+
+	test("waits for an issued outbound send before completing stop", async () => {
+		const delivery = deferred<void>();
+		const harness = await createHarness();
+		harness.adapter.sendGate = delivery.promise;
+		const emitted = harness.adapter.emit(message("conversation-1", "Hello"));
+		await harness.adapter.sendStarted.promise;
+		let stopped = false;
+		const stop = harness.stop().then(() => {
+			stopped = true;
+		});
+		await Promise.resolve();
+
+		expect(stopped).toBe(false);
+		delivery.resolve(undefined);
+		await emitted;
+		await stop;
+		expect(stopped).toBe(true);
+	});
+
+	test("polling failure cancels pending approval and preserves its error", async () => {
+		const approvalRequested = deferred<void>();
+		const decisions: boolean[] = [];
+		const harness = await createHarness({
+			runTurn: approvalRunTurn(approvalRequested, (approved) =>
+				decisions.push(approved),
+			),
+		});
+		const emitted = harness.adapter.emit(message("conversation-1", "Run it"));
+		await approvalRequested.promise;
+		const failure = new Error("polling failed");
+
+		harness.adapter.fail(failure);
+		await expect(harness.run).rejects.toBe(failure);
+		await emitted;
+		expect(decisions).toEqual([false]);
+		expect(harness.adapter.sent).toHaveLength(1);
+	});
+
+	test("initiating polling failure wins over a sibling abort rejection", async () => {
+		const original = new Error("polling failed");
+		const siblingCancellation = new Error("sibling cancelled");
+		const adapters = [
+			new FakeAdapter("telegram"),
+			new FakeAdapter("slack", async () => {}, siblingCancellation),
+		];
+		const harness = await createHarness({ adapters });
+
+		adapters[0]?.reportFailure(original);
+		await Promise.resolve();
+		adapters[0]?.finishFailure(original);
+
+		await expect(harness.run).rejects.toBe(original);
 	});
 
 	test("rejects an event attributed to another channel", async () => {
@@ -520,6 +641,264 @@ describe("ChannelGateway text handling", () => {
 		await harness.stop();
 	});
 
+	test("orders messages before delayed session acquisition", async () => {
+		const releaseAcquisition = deferred<void>();
+		const acquisitionStarted = deferred<void>();
+		const harness = await createHarness({
+			beforeCreateSession: () => {
+				acquisitionStarted.resolve(undefined);
+				return releaseAcquisition.promise;
+			},
+		});
+
+		const first = harness.adapter.emit(message("conversation-1", "first"));
+		const second = harness.adapter.emit(message("conversation-1", "second"));
+		await acquisitionStarted.promise;
+
+		expect(harness.createCalls).toHaveLength(1);
+		expect(harness.turnInputs).toHaveLength(0);
+
+		releaseAcquisition.resolve(undefined);
+		await Promise.all([first, second]);
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual([
+			"first",
+			"second",
+		]);
+		await harness.stop();
+	});
+
+	test("queued messages do not acquire a session after shutdown starts", async () => {
+		const firstStarted = deferred<void>();
+		const releaseFirst = deferred<void>();
+		const harness = await createHarness({
+			runTurn: async (input) => {
+				if (input.content === "first") {
+					firstStarted.resolve(undefined);
+					await releaseFirst.promise;
+				}
+				return { turnId: "turn-1", content: `Reply to ${input.content}` };
+			},
+		});
+		const first = harness.adapter.emit(message("conversation-1", "first"));
+		await firstStarted.promise;
+		const queued = harness.adapter.emit(message("conversation-1", "queued"));
+		const stop = harness.stop();
+
+		expect(harness.acquisitionCalls).toHaveLength(1);
+		releaseFirst.resolve(undefined);
+		await Promise.all([first, queued, stop]);
+		expect(harness.acquisitionCalls).toHaveLength(1);
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual(["first"]);
+	});
+
+	test("holds a conversation through every chunk of response delivery", async () => {
+		const firstChunkSent = deferred<void>();
+		const releaseFirstChunk = deferred<void>();
+		const chunks: Array<{ text: string; replyToMessageId?: string }> = [];
+		const adapter = new FakeAdapter("telegram", async (output) => {
+			const parts = [
+				output.text.slice(0, 4_000),
+				output.text.slice(4_000),
+			].filter((part) => part.length > 0);
+			for (const [index, part] of parts.entries()) {
+				chunks.push({
+					text: part,
+					replyToMessageId: index === 0 ? output.replyToMessageId : undefined,
+				});
+				if (output.text.startsWith("A") && index === 0) {
+					firstChunkSent.resolve(undefined);
+					await releaseFirstChunk.promise;
+				}
+			}
+		});
+		const harness = await createHarness({
+			adapters: [adapter],
+			runTurn: async (input) => ({
+				turnId: "turn-1",
+				content: input.content === "A" ? `A${"a".repeat(4_000)}` : "B reply",
+			}),
+		});
+
+		const first = adapter.emit(
+			message("conversation-1", "A", { messageId: "message-a" }),
+		);
+		await firstChunkSent.promise;
+		const second = adapter.emit(
+			message("conversation-1", "B", { messageId: "message-b" }),
+		);
+		await Promise.resolve();
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual(["A"]);
+
+		releaseFirstChunk.resolve(undefined);
+		await Promise.all([first, second]);
+		expect(chunks.map(({ text }) => text)).toEqual([
+			`A${"a".repeat(3_999)}`,
+			"a",
+			"B reply",
+		]);
+		expect(chunks.map(({ replyToMessageId }) => replyToMessageId)).toEqual([
+			"message-a",
+			undefined,
+			"message-b",
+		]);
+		await harness.stop();
+	});
+
+	test("keeps notice and assistant output contiguous before the next input", async () => {
+		const noticeStarted = deferred<void>();
+		const releaseNotice = deferred<void>();
+		const adapter = new FakeAdapter("telegram", async (output) => {
+			if (output.text === "Draft submitted.") {
+				noticeStarted.resolve(undefined);
+				await releaseNotice.promise;
+			}
+		});
+		const harness = await createHarness({ adapters: [adapter] });
+
+		const first = adapter.emit(message("conversation-1", "/draft hello"));
+		await noticeStarted.promise;
+		const second = adapter.emit(message("conversation-1", "/echo later"));
+		await Promise.resolve();
+		expect(adapter.sent.map(({ text }) => text)).toEqual(["Draft submitted."]);
+
+		releaseNotice.resolve(undefined);
+		await Promise.all([first, second]);
+		expect(adapter.sent.map(({ text }) => text)).toEqual([
+			"Draft submitted.",
+			"Reply to hello",
+			"later",
+		]);
+		await harness.stop();
+	});
+
+	test("keeps routing identities independent", async () => {
+		const releaseFirst = deferred<void>();
+		const firstStarted = deferred<void>();
+		const independentCompleted: string[] = [];
+		const adapters = [new FakeAdapter("telegram"), new FakeAdapter("slack")];
+		const harness = await createHarness({
+			adapters,
+			runTurn: async (input) => {
+				if (input.content === "blocked") {
+					firstStarted.resolve(undefined);
+					await releaseFirst.promise;
+				} else {
+					independentCompleted.push(input.content);
+				}
+				return { turnId: "turn-1", content: `Reply to ${input.content}` };
+			},
+		});
+
+		const blocked = adapters[0]?.emit(
+			message("same", "blocked", { threadId: "one" }),
+		);
+		await firstStarted.promise;
+		await Promise.all([
+			adapters[0]?.emit(message("same", "other-thread", { threadId: "two" })),
+			adapters[0]?.emit(
+				message("same", "other-kind", { conversationKind: "channel" }),
+			),
+			adapters[1]?.emit(message("same", "other-channel", { channel: "slack" })),
+		]);
+		expect(independentCompleted.sort()).toEqual([
+			"other-channel",
+			"other-kind",
+			"other-thread",
+		]);
+
+		releaseFirst.resolve(undefined);
+		await blocked;
+		await harness.stop();
+	});
+
+	test("holds later input through a delayed safe error reply", async () => {
+		const errorReplyStarted = deferred<void>();
+		const releaseErrorReply = deferred<void>();
+		const adapter = new FakeAdapter("telegram", async (output) => {
+			if (output.text === "Sorry, I could not handle that message.") {
+				errorReplyStarted.resolve(undefined);
+				await releaseErrorReply.promise;
+			}
+		});
+		const harness = await createHarness({
+			adapters: [adapter],
+			runTurn: async (input) => {
+				if (input.content === "fail") throw new Error("failed");
+				return { turnId: "turn-1", content: "recovered" };
+			},
+		});
+
+		const failed = adapter.emit(message("conversation-1", "fail"));
+		await errorReplyStarted.promise;
+		const later = adapter.emit(message("conversation-1", "later"));
+		await Promise.resolve();
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual(["fail"]);
+
+		releaseErrorReply.resolve(undefined);
+		await Promise.all([failed, later]);
+		expect(adapter.sent.map(({ text }) => text)).toEqual([
+			"Sorry, I could not handle that message.",
+			"recovered",
+		]);
+		await harness.stop();
+	});
+
+	test("releases ordering after delivery rejects", async () => {
+		let sends = 0;
+		const deliveryFailure = new Error("delivery failed");
+		const adapter = new FakeAdapter("telegram", async () => {
+			sends += 1;
+			if (sends === 1) throw deliveryFailure;
+		});
+		const harness = await createHarness({ adapters: [adapter] });
+
+		await expect(adapter.emit(message("conversation-1", "first"))).rejects.toBe(
+			deliveryFailure,
+		);
+		await adapter.emit(message("conversation-1", "second"));
+
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual([
+			"first",
+			"second",
+		]);
+		expect(adapter.sent.at(-1)?.text).toBe("Reply to second");
+		await harness.stop();
+	});
+
+	test("an older cleanup cannot clear ownership of newer queued work", async () => {
+		const releaseSecond = deferred<void>();
+		const secondStarted = deferred<void>();
+		const harness = await createHarness({
+			runTurn: async (input) => {
+				if (input.content === "second") {
+					secondStarted.resolve(undefined);
+					await releaseSecond.promise;
+				}
+				return { turnId: "turn-1", content: `Reply to ${input.content}` };
+			},
+		});
+
+		const first = harness.adapter.emit(message("conversation-1", "first"));
+		const second = harness.adapter.emit(message("conversation-1", "second"));
+		await first;
+		await secondStarted.promise;
+		const third = harness.adapter.emit(message("conversation-1", "third"));
+		await Promise.resolve();
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual([
+			"first",
+			"second",
+		]);
+
+		releaseSecond.resolve(undefined);
+		await Promise.all([second, third]);
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual([
+			"first",
+			"second",
+			"third",
+		]);
+		await harness.stop();
+	});
+
 	test("returns one safe response when runtime work fails", async () => {
 		let attempts = 0;
 		const harness = await createHarness({
@@ -629,6 +1008,64 @@ describe("ChannelGateway approval actions", () => {
 			"Tool approved.",
 		]);
 		expect(harness.turnInputs).toHaveLength(1);
+		await harness.stop();
+	});
+
+	test("resolves approval actions while another ordinary message is queued", async () => {
+		const approvalRequested = deferred<void>();
+		const harness = await createHarness({
+			runTurn: async (input, sessionId, approvals) => {
+				if (input.content !== "approve") {
+					return { turnId: "turn-2", content: "Queued reply." };
+				}
+
+				const decision = approvals.request({
+					toolCallId: "call-1",
+					toolName: "bash",
+					description: "Run a command",
+					parameters: { command: "bun test" },
+					turn: {
+						sessionId,
+						turnId: "turn-1",
+						source: input.source,
+						signal: input.signal,
+					},
+				});
+				approvalRequested.resolve(undefined);
+				return {
+					turnId: "turn-1",
+					content: (await decision).approved
+						? "Tool approved."
+						: "Tool denied.",
+				};
+			},
+		});
+		const waiting = harness.adapter.emit(message("conversation-1", "approve"));
+		await approvalRequested.promise;
+		const approvalOutput = harness.adapter.sent[0] as ChannelOutput;
+		const value = outputAction(approvalOutput, "Approve");
+		const queued = harness.adapter.emit(message("conversation-1", "queued"));
+		await Promise.resolve();
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual([
+			"approve",
+		]);
+
+		await harness.adapter.emit(
+			action("conversation-1", value, { userId: "wrong-user" }),
+		);
+		await harness.adapter.emit(action("conversation-1", value));
+		await harness.adapter.emit(action("conversation-1", value));
+		await Promise.all([waiting, queued]);
+
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual([
+			"approve",
+			"queued",
+		]);
+		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+			approvalOutput.text,
+			"Tool approved.",
+			"Queued reply.",
+		]);
 		await harness.stop();
 	});
 

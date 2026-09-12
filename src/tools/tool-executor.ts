@@ -137,6 +137,7 @@ export class ToolExecutor {
 
 		for (const hook of this.hooks.preTool ?? []) {
 			const decision = await hook(createContext());
+			turnContext.signal?.throwIfAborted();
 
 			if (decision.action === "allow") {
 				continue;
@@ -208,6 +209,8 @@ export class ToolExecutor {
 					turnContext,
 				});
 			}
+
+			turnContext.signal?.throwIfAborted();
 
 			logger.info("tool.permission.approved", {
 				toolName: call.name,

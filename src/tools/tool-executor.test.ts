@@ -151,6 +151,33 @@ describe("ToolExecutor", () => {
 		});
 	});
 
+	test("does not execute after cancellation while awaiting permission", async () => {
+		const abort = new AbortController();
+		let executed = false;
+		const guardedTool = createTestTool("guarded", async () => {
+			executed = true;
+			return { ok: true, content: "unreachable" };
+		});
+		registry.register(guardedTool);
+		turnContext = { ...turnContext, signal: abort.signal };
+		const executor = new ToolExecutor(registry, {
+			preTool: [() => ({ action: "ask" })],
+			permission: async () => {
+				abort.abort();
+				return { approved: true };
+			},
+		});
+
+		await expect(
+			executeTool(executor, {
+				id: "call_guarded",
+				name: "guarded",
+				parameters: {},
+			}),
+		).rejects.toHaveProperty("name", "AbortError");
+		expect(executed).toBe(false);
+	});
+
 	test("preTool deny skips execution and returns BLOCKED", async () => {
 		let executed = false;
 		registry = new ToolRegistry();

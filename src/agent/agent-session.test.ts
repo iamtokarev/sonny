@@ -13,6 +13,14 @@ import { ToolRegistry } from "../tools/tool-registry";
 import { AgentSession } from "./agent-session";
 import { SessionState } from "./session-state";
 
+function createDeferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
 type FakeLLMResult = {
 	content: string;
 	toolCalls: ToolCall[];
@@ -327,6 +335,64 @@ describe("AgentSession", () => {
 			{ id: "call_two", name: "read_test", parameters: {} },
 		]);
 		expect(resultIds).toEqual(["call_one", "call_two"]);
+	});
+
+	test("closes every tool call when an executor aborts and remains reusable", async () => {
+		const abort = new AbortController();
+		const preToolStarted = createDeferred<void>();
+		const releasePreTool = createDeferred<void>();
+		const tools = new ToolRegistry();
+		tools.register(testTool);
+		const toolExecutor = new ToolExecutor(tools, {
+			preTool: [
+				async () => {
+					preToolStarted.resolve(undefined);
+					await releasePreTool.promise;
+					return { action: "allow" };
+				},
+			],
+		});
+		const llm = new FakeLLM([
+			{
+				content: "",
+				stopReason: "tool_calls",
+				toolCalls: [
+					{ id: "call_one", name: "read_test", parameters: {} },
+					{ id: "call_two", name: "read_test", parameters: {} },
+				],
+			},
+			"Recovered",
+		]);
+		const historyRecorder = new FakeHistoryRecorder();
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			toolExecutor,
+			historyRecorder,
+		);
+		const interrupted = session.chat("Use tools", {
+			...createTurnContext(),
+			signal: abort.signal,
+		});
+		await preToolStarted.promise;
+		abort.abort();
+		releasePreTool.resolve(undefined);
+
+		await expect(interrupted).rejects.toHaveProperty("name", "AbortError");
+		const interruptedMessages = state.getMessages();
+		expect(
+			interruptedMessages
+				.filter((message) => message.role === "tool")
+				.map((message) => message.toolCallId),
+		).toEqual(["call_one", "call_two"]);
+		expect(historyRecorder.flushes).toEqual([interruptedMessages]);
+
+		await expect(session.chat("Try again", createTurnContext())).resolves.toBe(
+			"Recovered",
+		);
+		expect(llm.calls).toHaveLength(2);
 	});
 
 	test("records a denied result when cancellation interrupts pending approval", async () => {
@@ -676,6 +742,53 @@ describe("AgentSession", () => {
 			{ role: "user", content: "Hello" },
 			{ role: "assistant", content: "Hello back" },
 		]);
+	});
+
+	test("does not start a model request after cancellation during preparation", async () => {
+		const abort = new AbortController();
+		const preparationStarted = createDeferred<void>();
+		const releasePreparation = createDeferred<void>();
+		const contextManager = {
+			recordUsage: () => {},
+			inspect: () => ({
+				tokenCount: 100,
+				contextWindowTokens: 200,
+				thresholdTokens: 150,
+				thresholdRatio: 0.75,
+			}),
+			prepare: async () => {
+				preparationStarted.resolve(undefined);
+				await releasePreparation.promise;
+				return {
+					messages: state.getMessages(),
+					tokenCountBefore: 100,
+					tokenCountAfter: 100,
+					thresholdTokens: 150,
+					changed: false,
+					compactedToolResultCount: 0,
+					summaryCompactedMessageCount: 0,
+				};
+			},
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			undefined,
+			contextManager,
+		);
+		const chat = session.chat("Hello", {
+			...createTurnContext(),
+			signal: abort.signal,
+		});
+		await preparationStarted.promise;
+		abort.abort();
+		releasePreparation.resolve(undefined);
+
+		await expect(chat).rejects.toHaveProperty("name", "AbortError");
+		expect(llm.calls).toHaveLength(0);
 	});
 
 	test("does not rewrite history when prepared context is unchanged", async () => {

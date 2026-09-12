@@ -5,6 +5,7 @@ import { createLogger } from "../../utils/logger";
 import type {
 	ChannelAction,
 	ChannelAdapter,
+	ChannelAdapterFailureHandler,
 	ChannelConversationKind,
 	ChannelEvent,
 	ChannelEventHandler,
@@ -107,6 +108,7 @@ function errorName(error: unknown): string {
 export class TelegramAdapter implements ChannelAdapter {
 	readonly name = "telegram";
 	private hasRun = false;
+	private lifecycleSignal?: AbortSignal;
 
 	constructor(
 		config: EnabledTelegramChannelConfig,
@@ -114,51 +116,89 @@ export class TelegramAdapter implements ChannelAdapter {
 		private readonly startRunner: StartTelegramRunner = run,
 	) {}
 
-	async run(handler: ChannelEventHandler, signal: AbortSignal): Promise<void> {
+	async run(
+		handler: ChannelEventHandler,
+		signal: AbortSignal,
+		onFailure?: ChannelAdapterFailureHandler,
+	): Promise<void> {
 		if (this.hasRun) {
 			throw new Error("Telegram adapter instances can only be run once.");
 		}
 		this.hasRun = true;
+		this.lifecycleSignal = signal;
 
-		this.bot.on("message:text", async (context) => {
-			const source = toTelegramSource(context);
+		if (signal.aborted) {
+			return;
+		}
 
-			if (source === null) {
-				return;
-			}
+		const handlers = new Set<Promise<void>>();
+		let accepting = !signal.aborted;
+		const track = (work: () => Promise<void>): Promise<void> => {
+			const task = work();
+			handlers.add(task);
+			void task.then(
+				() => handlers.delete(task),
+				() => handlers.delete(task),
+			);
+			return task;
+		};
 
-			await this.dispatch(handler, {
-				type: "message",
-				source,
-				text: context.message.text,
-			});
-		});
+		this.bot.on("message:text", (context) =>
+			track(async () => {
+				if (!accepting) {
+					return;
+				}
 
-		this.bot.on("callback_query:data", async (context) => {
-			try {
-				await context.answerCallbackQuery();
-			} catch (error) {
-				logger.warn("telegram.callback.answer_failed", {
-					errorName: errorName(error),
+				const source = toTelegramSource(context);
+
+				if (source === null) {
+					return;
+				}
+
+				await this.dispatch(handler, {
+					type: "message",
+					source,
+					text: context.message.text,
 				});
-			}
+			}),
+		);
 
-			const source = toTelegramCallbackSource(context);
+		this.bot.on("callback_query:data", (context) =>
+			track(async () => {
+				if (!accepting) {
+					return;
+				}
 
-			if (source === null) {
-				return;
-			}
+				try {
+					await context.answerCallbackQuery();
+				} catch (error) {
+					logger.warn("telegram.callback.answer_failed", {
+						errorName: errorName(error),
+					});
+				}
 
-			await this.dispatch(handler, {
-				type: "action",
-				source,
-				value: context.callbackQuery.data,
-			});
-		});
+				if (!accepting) {
+					return;
+				}
+
+				const source = toTelegramCallbackSource(context);
+
+				if (source === null) {
+					return;
+				}
+
+				await this.dispatch(handler, {
+					type: "action",
+					source,
+					value: context.callbackQuery.data,
+				});
+			}),
+		);
 
 		const runner = this.startRunner(this.bot);
 		let stopPromise: Promise<void> | undefined;
 		const stop = () => {
+			accepting = false;
 			if (stopPromise === undefined && runner.isRunning()) {
 				stopPromise = runner.stop();
 				void stopPromise.catch(() => {});
@@ -173,11 +213,23 @@ export class TelegramAdapter implements ChannelAdapter {
 			signal.addEventListener("abort", stop, { once: true });
 		}
 
+		let failure: unknown;
 		try {
 			await runner.task();
+		} catch (error) {
+			failure = error;
+			accepting = false;
+			onFailure?.(error);
 		} finally {
 			signal.removeEventListener("abort", stop);
 			await stop();
+			while (handlers.size > 0) {
+				await Promise.allSettled([...handlers]);
+			}
+		}
+
+		if (failure !== undefined) {
+			throw failure;
 		}
 	}
 
@@ -190,6 +242,9 @@ export class TelegramAdapter implements ChannelAdapter {
 
 		try {
 			for (const [index, chunk] of chunks.entries()) {
+				if (this.lifecycleSignal?.aborted) {
+					return;
+				}
 				const isFirst = index === 0;
 				const isLast = index === chunks.length - 1;
 				const keyboard = isLast
