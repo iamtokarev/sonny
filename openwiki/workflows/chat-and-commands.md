@@ -1,29 +1,32 @@
 ---
 type: Workflow
 title: Sonny chat and command workflow
-description: Describes how the interactive TUI handles user input, slash commands, session selection, tool approvals, config hot-reload polling and the /reload command, and resume/continue behavior.
+description: Describes how the interactive TUI handles user input, slash commands, session selection, tool approvals, config hot-reload polling and the /reload command, and resume/continue behavior. Also notes the shared SessionInteractor input path used by the channel gateway.
 tags: [workflow, cli, commands, chat, reload]
 resource: /src/cli/chat-loop.tsx
 ---
 
 # Sonny chat and command workflow
 
-The primary user experience is the `chat` command. Input is handled in two layers: deterministic slash commands first, then normal chat input through the agent session. The TUI is now a declarative React/Ink component tree (`src/ui/`) built around the Mulberry design system, with a centralized key router (`src/ui/key-router.ts`) that maps every keystroke to a `KeyIntent` across four modes (idle, busy, approval, popup).
+The primary user experience is the `chat` command. Input is handled in two layers: deterministic slash commands first, then normal chat input through the agent session. Both layers now flow through a shared `SessionInteractor` (`src/conversation/session-interactor.ts`) that serializes commands and turns onto a single per-session queue, so a quick command cannot overtake an earlier user message. The TUI is a declarative React/Ink component tree (`src/ui/`) built around the Mulberry design system, with a centralized key router (`src/ui/key-router.ts`) that maps every keystroke to a `KeyIntent` across four modes (idle, busy, approval, popup).
 
 ## Entry points
 
 - `src/cli/main.ts` registers `chat`, `--resume <session-id>`, and `--continue`.
-- `src/cli/chat-loop.tsx` renders the Ink UI and controls the message loop.
+- `src/cli/chat-loop.tsx` renders the Ink UI, owns a `SessionInteractor` per session, and controls the message loop.
+- `src/conversation/session-interactor.ts` owns input ordering and command/turn routing shared with the channel gateway.
 - `src/commands/create-command-registry.ts` wires the built-in slash commands.
 
 ## Input flow
 
 1. The user submits text in the terminal UI. The composer (`src/ui/components/composer.tsx`) manages editing state through a pure reducer (`src/ui/text-input.ts`).
 2. A single `useInput` handler calls `routeKey({ mode, input, key, quitArmed })` from `src/ui/key-router.ts`, which returns a `KeyIntent` such as `submit`, `cancelTurn`, `approve`, `deny`, or `quit`.
-3. The command registry checks whether the submitted text is a slash command.
-4. If it is a slash command, the registry returns a result intent such as `message`, `submit`, `alias`, or `exit`.
-5. If it is not a slash command, the text is sent to `AgentRuntime.runTurn()` with an `AbortSignal` from the UI, which creates a `TurnContext` and delegates to `AgentSession.chat()`.
-6. Tool calls requested by the model are surfaced in the UI via event bus subscription — `tool.started` and `tool.completed` events update the display in real time. The runtime classifies each tool outcome with a `ToolCompletionStatus`, and the UI renders that classification rather than inferring status from content. Approval is still handled interactively when tool hooks request permission.
+3. On submit, the chat loop creates an `AbortController`, records it as the active turn abort, and calls `interactor.handle({ content: text, source: { kind: "cli" }, signal: abort.signal })`.
+4. `SessionInteractor` queues the input on its per-session `tail` chain, then dispatches: if the content starts with `/`, it runs through the `CommandRegistry`; otherwise it runs `AgentRuntime.runTurn({ content, source, signal })`.
+5. Tool calls requested by the model are surfaced in the UI via event bus subscription — `tool.started` and `tool.completed` events update the display in real time. The runtime classifies each tool outcome with a `ToolCompletionStatus`, and the UI renders that classification rather than inferring status from content. Approval is still handled interactively when tool hooks request permission.
+6. Result messages (`assistant`, `command`, `notice`) are rendered back into the transcript in order; an `exitRequested` result terminates the loop.
+
+The interactive approval UI stays a CLI-only concern: the chat loop passes a TUI approval callback into `createAgentSession` as `approveToolCall`, while the gateway passes the `ChannelApprovalBroker` instead (see [channels and gateway](../integrations/channels.md)).
 
 ## Slash commands
 
@@ -35,6 +38,8 @@ The built-in command set currently includes:
 - `/reload` for reloading configuration files (force, with a `reload` source)
 - `/skills [query]` for listing loaded skills
 - `/session` for session metadata
+
+The channel command registry additionally includes `/new` (alias `/reset`), which is a `channel-control` command that starts a fresh session for a messaging conversation. It is intentionally not registered for the TUI; see [channel gateway workflow](channel-gateway-workflow.md) for its reset semantics.
 
 Slash-command output is treated as UI-only and is not written into LLM history. A bare `/` is ordinary chat input because it has no command name; unknown named commands produce a UI-only error. Commands that need runtime state implement against a `SlashCommandContext` (`src/commands/command.ts`) exposing `getMessageCount()`, `getContextUsage()`, `compactContext()`, and `reloadConfiguration()`; `/reload` calls `reloadConfiguration()` and formats the `RuntimeConfigurationResult` (`unchanged` / `reloaded{runtimeRebuilt}` / `rejected`) via `createReloadCommand()` in `src/commands/builtin/reload-command.ts`.
 
@@ -74,6 +79,10 @@ If a tool approval prompt is pending when cancellation fires, the UI auto-denies
 
 See [architecture overview](../architecture/overview.md) for how `AbortSignal` flows through the runtime layers.
 
+## Shared input path (SessionInteractor)
+
+Both the interactive `chat` command and the headless gateway route input through `SessionInteractor` (`src/conversation/session-interactor.ts`), which serializes synchronous commands and runtime turns onto a single per-interactor queue so a quick command cannot overtake an earlier user message. It resolves slash commands, aliases (up to five resolutions), `submit`, `exit`, and `channel-control` results, and binds `getContextUsage` / `compactContext` / `reloadConfiguration` to the originating `RuntimeSource` (`{ kind: "cli" }` for the TUI, `{ kind: "channel", ... }` for the gateway). The only divergence is the approval strategy: the TUI supplies an interactive callback, while the gateway supplies the `ChannelApprovalBroker` (documented in [channel gateway workflow](channel-gateway-workflow.md)).
+
 ## Source anchors
 
 - `src/cli/main.ts`
@@ -84,6 +93,7 @@ See [architecture overview](../architecture/overview.md) for how `AbortSignal` f
 - `src/commands/create-command-registry.ts`
 - `src/commands/builtin/reload-command.ts`
 - `src/commands/builtin/*`
+- `src/conversation/session-interactor.ts`
 - `src/runtime/agent-runtime.ts`
 - `src/ui/key-router.ts`
 - `src/ui/text-input.ts`

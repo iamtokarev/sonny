@@ -12,8 +12,9 @@ This page is a navigation aid for the code paths that matter most in the first-p
 
 ## Runtime and CLI
 
-- `src/cli/main.ts` — command-line entrypoint; opens `ConfigStore`, then starts the `chat` command
+- `src/cli/main.ts` — command-line entrypoint; opens `ConfigStore`, then starts the `chat` or `gateway` command
 - `src/cli/chat-loop.tsx` — interactive Ink UI, event subscription, command handling, 5-second config-poll interval
+- `src/cli/gateway-command.ts` — `runGatewayCommand`: headless lifecycle for the channel gateway (SIGINT/SIGTERM)
 - `src/runtime/create-agent-session.ts` — runtime composition root; defines the `AgentSessionBuilder` factory and wraps it in `ReloadableAgentSession`
 - `src/runtime/agent-runtime.ts` — turn serialization, turn lifecycle events, and pre-turn/pre-compact config refresh
 - `src/runtime/reloadable-agent-session.ts` — hot-reload wrapper implementing `ConfigurableAgentRuntimeSession`; advances snapshots or rebuilds the live runtime
@@ -98,9 +99,27 @@ This page is a navigation aid for the code paths that matter most in the first-p
 - `src/web/web-search-provider.ts` — search interface
 - `src/web/web-read-provider.ts` — read interface
 
+## Channels and gateway
+
+- `src/channels/channel.ts` — core channel domain contracts (`ChannelSource`, `ChannelEvent`, `ChannelAdapter`, `ChannelOutput`, `toChannelTarget`)
+- `src/channels/channel-gateway.ts` — `ChannelGateway`: runs adapters, serializes per-conversation turns, handles resets, drives delivery and approvals
+- `src/channels/create-channel-gateway.ts` — composition root; builds adapters/delivery/approvals/bindings/sessions from one config snapshot and the access check
+- `src/channels/channel-delivery.ts` — `ChannelDelivery`: routes `ChannelOutput` to the named adapter and rejects unknown channels
+- `src/channels/channel-errors.ts` — `ChannelDeliveryError`
+- `src/channels/channel-approval-broker.ts` — `ChannelApprovalBroker`: delivers approval prompts as inline buttons and resolves `allow`/`deny` callback actions
+- `src/channels/channel-session-directory.ts` — `ChannelSessionDirectory`: live interactor cache plus persisted binding resume/replace/evict lifecycle
+- `src/channels/channel-session-binding-store.ts` — atomic JSON persistence of conversation→session bindings and `createChannelSessionKey`
+- `src/channels/channel-prompt.ts` — `buildChannelPrompt(source)`: channel-aware system-prompt context appended by `AgentSession`
+- `src/channels/telegram/telegram-adapter.ts` — grammY-based `TelegramAdapter` (long-polling, inline keyboards, chunked delivery)
+- `src/channels/telegram/telegram-text.ts` — `splitTelegramText`: bounded chunk splitting for the 4000-char message limit
+- `src/conversation/session-interactor.ts` — `SessionInteractor`: shared serialized input→command/turn path used by both the TUI chat loop and the gateway
+- `src/cli/gateway-command.ts` — `runGatewayCommand`: SIGINT/SIGTERM-handled lifecycle around `ChannelGateway.run`
+- `src/commands/builtin/new-session-command.ts` — `/new` (`/reset`) channel-control command that triggers session replacement
+
 ## What to read first when changing something
 
-- If the change affects user input or slash commands, start with `src/cli/chat-loop.tsx`, `src/ui/key-router.ts`, `src/commands/*` (including `src/commands/builtin/reload-command.ts` for the `/reload` command).
+- If the change affects user input or slash commands, start with `src/cli/chat-loop.tsx`, `src/ui/key-router.ts`, `src/commands/*` (including `src/commands/builtin/reload-command.ts` for the `/reload` command and `src/commands/builtin/new-session-command.ts` for `/new`).
+- If the change affects messaging channels, the gateway, conversation bindings, or remote approval, start with `src/channels/channel-gateway.ts` and `src/channels/create-channel-gateway.ts` (see [channels and gateway](integrations/channels.md)).
 - If the change affects config hot reload or the runtime config signature, start with `src/config/config-store.ts`, `src/runtime/reloadable-agent-session.ts`, `src/runtime/runtime-config-signature.ts`, and `src/runtime/agent-runtime.ts` (see [configuration and operations](operations/configuration.md)).
 - If the change affects event types or the event bus, start with `src/events/*` and `src/runtime/agent-runtime.ts`.
 - If the change affects TUI rendering, theming, or component layout, start with `src/ui/theme.ts`, `src/ui/components/*`, and `src/ui/transcript.ts`.

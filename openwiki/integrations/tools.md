@@ -1,7 +1,7 @@
 ---
 type: Integration Guide
 title: Sonny tools and guardrails
-description: Documents the tool registry, tool executor, built-in file and shell tools, skill loading, and web tools, including approval and policy hooks.
+description: Documents the tool registry, tool executor, built-in file and shell tools, skill loading, web tools, and the approval hook injection point that lets the TUI and the channel gateway supply different permission strategies.
 tags: [integrations, tools, safety, runtime]
 resource: /src/tools/create-tool-registry.ts
 ---
@@ -60,6 +60,10 @@ The default hooks include:
 
 The file policy blocks dotenv basenames, selected sensitive files, known credential directories, and selected device paths; it resolves paths and follows existing symlinks but does **not** impose a general workspace-root boundary. `bash` is approval-gated but does not have a command allowlist or a workspace-only working-directory restriction in the current implementation. The executor returns a `BLOCKED:` payload that tells the model not to retry or bypass a denied action. Tool denial and tool-not-found also emit `tool.completed` events with `status: "denied"` or `status: "not_found"` respectively, so the UI is always notified. These boundaries are intentionally important when extending the runtime and are surfaced by the [chat and command workflow](../workflows/chat-and-commands.md).
 
+### Approval hook injection
+
+The `PermissionHook` is not hard-wired: it is injected at session assembly in `src/runtime/create-agent-session.ts` via the `approveToolCall` option. The interactive TUI supplies a callback that renders the approval pane (`src/ui/approval-pane.tsx`) and waits for a keystroke; the channel gateway supplies `ChannelApprovalBroker.request`, which delivers the permission prompt to the messaging channel as inline buttons and resolves on a button callback (see [channels and gateway](channels.md)). Because the hook receives `ToolPermissionRequest` (including `turn.source`), an approval strategy can behave differently for `cli`, `channel`, and `system` sources — the broker denies non-channel requests without delivery.
+
 ## Why this matters
 
 The repository has grown from a simple chat loop into a local agent with filesystem, shell, skills, and web integration. The tool layer is the main extension point and the main safety boundary, so future changes should usually start here.
@@ -80,3 +84,4 @@ The tool registry is constructed inside the runtime's `AgentSessionBuilder` fact
 - `src/tools/builtin/load-skill-tool.ts`
 - `src/tools/builtin/web-search-tool.ts`
 - `src/tools/builtin/web-read-tool.ts`
+- `src/tools/tool-approval-description.ts`
