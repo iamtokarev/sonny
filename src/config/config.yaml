@@ -17,5 +17,6 @@ contextCompaction:
 
 channels:
   telegram:
-    enabled: false
-    allowedUserIds: []
+    enabled: true
+    allowedUserIds:
+      - "363571486"
