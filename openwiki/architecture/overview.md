@@ -1,7 +1,7 @@
 ---
 type: Architecture Overview
 title: Sonny architecture overview
-description: Explains how the Sonny CLI, event-driven runtime, AgentRuntime, agent session, ReloadableAgentSession config hot-reload layer, event bus, tool executor, context manager, history store, turn cancellation via AbortSignal, compaction and config-reload events, and the Mulberry TUI component layer fit together.
+description: Explains how the Sonny CLI, event-driven runtime, AgentRuntime, agent session, ReloadableAgentSession config hot-reload layer, event bus, tool executor, context manager, history store, turn cancellation via AbortSignal, compaction and config-reload events, the Mulberry TUI component layer, and the headless messaging channel gateway fit together.
 tags: [architecture, runtime, cli, agent, events, reload]
 resource: /src/runtime/create-agent-session.ts
 ---
@@ -14,14 +14,15 @@ Sonny is centered on a single interactive agent runtime. The CLI starts a chat s
 
 - `src/cli/main.ts` defines `main()`, which opens the `ConfigStore` before parsing arguments, registers the `chat` command (with `--resume`/`--continue`), creates the `InMemoryRuntimeEventBus`, and passes both the `configStore` and event bus into the runtime and the UI. Startup failures surface through a centralized `main().catch()`.
 - `src/cli/chat-loop.tsx` owns the Ink TUI, slash-command dispatch, message rendering, and tool approval UI; it subscribes to the event bus for real-time tool lifecycle updates and config-reload notices, and runs a 5-second `config-poll` interval that asks the runtime to refresh configuration.
+- `src/cli/main.ts` also registers a `gateway` command that runs Sonny headlessly over messaging channels. The gateway path reuses `createAgentSession` and `AgentRuntime` but bypasses the TUI; its workflow is documented in [channel gateway workflow](../workflows/channel-gateway-workflow.md) and its subsystem in [channels and gateway](../integrations/channels.md).
 - `src/runtime/create-agent-session.ts` assembles the working set from a `RuntimeConfigStore`: it calls `configStore.refresh()` first, uses the resulting snapshot to locate skills/history/agent definition, defines a `buildSession: AgentSessionBuilder` factory that constructs the LLM provider, tool registry, hooks, executor, token counter, summarizer, and context manager for a given config, and wraps that factory's first build in a `ReloadableAgentSession` before constructing `AgentRuntime`.
 - `src/runtime/agent-runtime.ts` serializes turns per session, creates `TurnContext` (carrying an `AbortSignal` for cancellation), refreshes configuration before each turn and each `/compact`, emits turn lifecycle events (`turn.started`, `turn.completed`, `turn.failed`, `turn.cancelled`), and emits config-reload events (`config.reloaded`, `config.reload.failed`) through a private `refreshConfiguration()` helper.
 - `src/runtime/reloadable-agent-session.ts` is the hot-reload layer: `ReloadableAgentSession` implements `ConfigurableAgentRuntimeSession`, delegates `chat`/`getMessageCount`/`getContextUsage`/`compactContext` to the active built session, and `refreshConfiguration({ force })` decides whether to advance the snapshot only or rebuild the live runtime.
-- `src/agent/agent-session.ts` is the core conversation engine; `chat()` accepts a `TurnContext` and passes it to `ToolExecutor.execute()`. It checks the abort signal at each LLM iteration and before each tool execution, stopping the turn at the next checkpoint.
-- `src/events/` defines the event system: `RuntimeEvent` types (including `turn.cancelled`, `context.compaction.started` / `context.compaction.completed`, and `config.reloaded` / `config.reload.failed`), `RuntimeEventBus` / `RuntimeEventPublisher` interfaces, `InMemoryRuntimeEventBus`, `TurnContext` (with optional `AbortSignal`), and `publishRuntimeEvent()`.
+- `src/agent/agent-session.ts` is the core conversation engine; `chat()` accepts a `TurnContext` and passes it to `ToolExecutor.execute()`. It checks the abort signal at each LLM iteration and before each tool execution, stopping the turn at the next checkpoint. For channel-originated turns, `buildEffectiveSystemPrompt(source)` appends `buildChannelPrompt(source)` so the model adapts to plain messaging text and hides internal identifiers.
+- `src/events/` defines the event system: `RuntimeEvent` types (including `turn.cancelled`, `context.compaction.started` / `context.compaction.completed`, and `config.reloaded` / `config.reload.failed`), `RuntimeEventBus` / `RuntimeEventPublisher` interfaces, `InMemoryRuntimeEventBus`, `TurnContext` (with optional `AbortSignal`), and `publishRuntimeEvent()`. `RuntimeSource` now has three variants — `cli`, `channel` (carrying channel/conversation/user identity for gateway-originated turns), and `system` — so the runtime, context manager, and approval hooks can behave per source.
 - `src/agent/session-state.ts` tracks the mutable message state for the active session.
 - `src/history/history-store.ts` persists sessions and messages on disk.
-- `src/tools/tool-executor.ts` enforces policy, approval, execution, and result transforms for tool calls; emits `tool.started` and `tool.completed` events via `publishRuntimeEvent()`.
+- `src/tools/tool-executor.ts` enforces policy, approval, execution, and result transforms for tool calls; emits `tool.started` and `tool.completed` events via `publishRuntimeEvent()`. The approval hook is injected at session assembly: the TUI passes an interactive approval callback, while the gateway passes `ChannelApprovalBroker.request` so tool permission prompts are delivered to the messaging channel as inline buttons (see [channels and gateway](../integrations/channels.md)).
 - `src/context/context-manager.ts` estimates token usage and compacts history when needed; publishes `context.compaction.started` / `context.compaction.completed` events through the `TurnContext`.
 - `src/ui/` is the TUI presentation layer, rebuilt around the Mulberry design system: pure-logic modules (`theme.ts`, `markdown.ts`, `text-input.ts`, `key-router.ts`, `tool-row.ts`, `transcript.ts`, `context-meter.ts`, `approval.ts`, `command-popup.ts`) and declarative Ink components in `src/ui/components/`. The TUI subscribes to the event bus and renders tool outcomes, turn status, and compaction progress from runtime events rather than inferring them from content.
 
@@ -41,6 +42,8 @@ That choice matters because the runtime is intentionally assembled from small ab
 - the **context system** is isolated in `src/context/*`
 - the **history system** is isolated in `src/history/*`
 - the **skills system** is isolated in `src/skills/*`
+- the **channels system** is isolated in `src/channels/*` (see [channels and gateway](../integrations/channels.md))
+- the **shared conversation input path** is isolated in `src/conversation/*` (`SessionInteractor` serializes commands and turns per session and is used by both the TUI and the gateway)
 
 ## Conversation flow
 

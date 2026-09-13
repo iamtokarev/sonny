@@ -1,7 +1,7 @@
 ---
 type: Testing Guide
 title: Sonny testing guide
-description: Summarizes the repository test and verification commands, and highlights the highest-value areas to test when changing runtime, tool, context, history, or configuration code.
+description: Summarizes the repository test and verification commands, and highlights the highest-value areas to test when changing runtime, tool, context, history, configuration, channels, or conversation code.
 tags: [testing, verification, quality]
 resource: /package.json
 ---
@@ -30,7 +30,9 @@ When changing the runtime, focus on the following areas first:
 - `src/tools/*` — approval, policy, and execution behavior including event emission
 - `src/context/*` — compaction, token counting, and compaction event publishing through `TurnContext`
 - `src/history/*` — resume/continue and JSONL persistence
-- `src/cli/*` and `src/commands/*` — command handling, TUI flow, event subscription, turn cancellation via `AbortSignal`, transcript restoration, and the 5-second config-poll guard (`createConfigPollTick`)
+- `src/cli/*` and `src/commands/*` — command handling, TUI flow, event subscription, turn cancellation via `AbortSignal`, transcript restoration, the 5-second config-poll guard (`createConfigPollTick`), and the headless `gateway` command lifecycle
+- `src/channels/*` — channel gateway lifecycle (adapter start/stop, fail-fast), per-conversation serialization, `/new` reset semantics, access checks, `ChannelApprovalBroker` timeout/cancel/delivery-failure, `ChannelSessionDirectory` resume/replace/evict, and `ChannelSessionBindingStore` atomic persistence
+- `src/conversation/*` — `SessionInteractor` arrival-order serialization, command/turn/alias routing, source-bound context/compaction/reload, and aborted-input handling
 - `src/ui/*` — pure-logic modules (theme, markdown, text-input, key-router, tool-row, transcript, context-meter), component rendering via `src/ui/test-support/ink-harness.tsx`, and tool outcome classification
 - `src/llm/*` — signal passing as a request option and abort error re-throwing
 - `src/web/*` — optional search/read provider behavior
@@ -50,6 +52,7 @@ A change that touches the conversation lifecycle should usually verify:
 7. compaction still preserves tool-call structure and publishes paired `context.compaction.started` / `context.compaction.completed` events even on failure
 8. web tools still stay behind the Tavily configuration gate
 9. config reload: an unchanged fingerprint yields `unchanged`; a semantic LLM change rebuilds the runtime and emits `config.reloaded` with `runtimeRebuilt: true`; a `sessionDefaults`-only change advances the revision without rebuilding (`runtimeRebuilt: false`); an invalid edit returns `rejected` retaining the last snapshot and emits `config.reload.failed`; a rejected apply is not retried until `force: true`; and the 5-second poll never stacks a second reload while one is in flight
+10. channels: the gateway starts every adapter and stops them on abort; a transport failure fails fast and cancels pending approvals; per-conversation turns are serialized (queued messages do not overtake a running turn); `/new` interrupts active work, discards queued messages, replaces only the invoking binding, and confirms reset; unauthorized sources are rejected before session acquisition; a pending approval times out and is denied; gateway shutdown denies pending approvals; bindings persist atomically and survive a fresh directory; `SessionInteractor` preserves arrival order and skips aborted queued inputs
 
 ## Source anchors
 

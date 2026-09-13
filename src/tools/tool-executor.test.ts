@@ -102,7 +102,19 @@ describe("ToolExecutor", () => {
 		expect(permissionCalled).toBe(false);
 	});
 
-	test("preTool ask calls permission hook", async () => {
+	test("preTool ask forwards the originating turn to permission", async () => {
+		const abort = new AbortController();
+		turnContext = {
+			...turnContext,
+			source: {
+				kind: "channel",
+				channel: "telegram",
+				conversationId: "conversation-1",
+				conversationKind: "direct",
+				userId: "user-1",
+			},
+			signal: abort.signal,
+		};
 		const permissionRequests: unknown[] = [];
 		const executor = new ToolExecutor(registry, {
 			preTool: [() => ({ action: "ask", reason: "needs user approval" })],
@@ -124,7 +136,46 @@ describe("ToolExecutor", () => {
 			toolCallId: "call_test",
 			toolName: "test_tool",
 			reason: "needs user approval",
+			turn: {
+				sessionId: "session-1",
+				turnId: "turn-1",
+				source: {
+					kind: "channel",
+					channel: "telegram",
+					conversationId: "conversation-1",
+					conversationKind: "direct",
+					userId: "user-1",
+				},
+				signal: abort.signal,
+			},
 		});
+	});
+
+	test("does not execute after cancellation while awaiting permission", async () => {
+		const abort = new AbortController();
+		let executed = false;
+		const guardedTool = createTestTool("guarded", async () => {
+			executed = true;
+			return { ok: true, content: "unreachable" };
+		});
+		registry.register(guardedTool);
+		turnContext = { ...turnContext, signal: abort.signal };
+		const executor = new ToolExecutor(registry, {
+			preTool: [() => ({ action: "ask" })],
+			permission: async () => {
+				abort.abort();
+				return { approved: true };
+			},
+		});
+
+		await expect(
+			executeTool(executor, {
+				id: "call_guarded",
+				name: "guarded",
+				parameters: {},
+			}),
+		).rejects.toHaveProperty("name", "AbortError");
+		expect(executed).toBe(false);
 	});
 
 	test("preTool deny skips execution and returns BLOCKED", async () => {

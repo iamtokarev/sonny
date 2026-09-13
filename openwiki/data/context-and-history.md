@@ -14,6 +14,8 @@ Sonny persists every chat session as JSONL and uses a context manager to keep ac
 
 `src/history/history-store.ts` writes session metadata to an index file and messages to per-session JSONL files under the workspace `.history` directory.
 
+The channel gateway persists conversation→session bindings separately under `<workspace>/.history/channels/bindings.json` (see [channels and gateway](../integrations/channels.md)); the JSONL session files themselves are shared, so a session created or resumed through the gateway is the same on-disk session a later `chat --resume <id>` would load.
+
 A history session includes:
 
 - session ID

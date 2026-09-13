@@ -5,7 +5,11 @@ import type {
 	ResolvedConfig,
 } from "../config";
 import { ConfigReloadError } from "../config";
-import { InMemoryRuntimeEventBus, type TurnContext } from "../events";
+import {
+	InMemoryRuntimeEventBus,
+	type RuntimeSource,
+	type TurnContext,
+} from "../events";
 import type { AgentRuntimeSession } from "./agent-runtime";
 import {
 	type AgentSessionBuilder,
@@ -31,6 +35,12 @@ function createConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
 			protectedHeadMessages: 4,
 			protectedTailMessages: 6,
 			summaryMaxTokens: 4000,
+		},
+		channels: {
+			telegram: {
+				enabled: false,
+				allowedUserIds: [],
+			},
 		},
 		...overrides,
 	};
@@ -104,6 +114,51 @@ describe("ReloadableAgentSession", () => {
 		);
 		expect(session.chat).toHaveBeenCalledWith("hello", context);
 		expect(wrapper.getMessageCount()).toBe(4);
+	});
+
+	test("forwards source-aware context inspection and compaction", async () => {
+		const snapshot = createSnapshot(1);
+		const source: RuntimeSource = {
+			kind: "channel",
+			channel: "telegram",
+			conversationId: "conversation-1",
+			conversationKind: "direct",
+			userId: "user-1",
+		};
+		const usage = {
+			tokenCount: 100,
+			contextWindowTokens: 200_000,
+			thresholdTokens: 150_000,
+			thresholdRatio: 0.75,
+		};
+		const prepared = {
+			messages: [],
+			tokenCountBefore: 100,
+			tokenCountAfter: 100,
+			thresholdTokens: 150_000,
+			changed: false,
+			compactedToolResultCount: 0,
+			summaryCompactedMessageCount: 0,
+		};
+		const getContextUsage = mock((_source: RuntimeSource) => usage);
+		const compactContext = mock(async (_context: TurnContext) => prepared);
+		const session: AgentRuntimeSession = {
+			...createSession("initial"),
+			getContextUsage,
+			compactContext,
+		};
+		const wrapper = new ReloadableAgentSession(
+			createStore(snapshot, async () => ({ status: "unchanged", snapshot })),
+			() => ({ session, info: { model: "unused", toolNames: [] } }),
+			snapshot,
+			{ session, info: { model: "openai/model-a", toolNames: [] } },
+		);
+		const turnContext = { ...createTurnContext(), source };
+
+		expect(wrapper.getContextUsage(source)).toBe(usage);
+		await expect(wrapper.compactContext(turnContext)).resolves.toBe(prepared);
+		expect(getContextUsage).toHaveBeenCalledWith(source);
+		expect(compactContext).toHaveBeenCalledWith(turnContext);
 	});
 
 	test("atomically rebuilds for OpenRouter configuration changes", async () => {

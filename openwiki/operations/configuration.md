@@ -21,7 +21,7 @@ Sonny loads YAML configuration plus optional dotenv overrides into an immutable,
   - `rejected` — reload failed (parse/validation/IO); the last valid snapshot is retained and a safe `ConfigReloadError` is returned, so the runtime keeps running.
 - `refresh()` is serialized through an internal `refreshTail` promise chain, so concurrent refreshes collapse to a single reload.
 
-`diffConfigSections()` in `src/config/config-diff.ts` reports human-meaningful sections: `llm`, `contextCompaction`, `web`, `sessionDefaults`. Only `sessionDefaults` (`workspace`, `agentsPath`, `defaultAgent`) are future-session defaults that do **not** require rebuilding the live runtime — the runtime layer uses `createRuntimeConfigSignature()` to make that distinction (see [architecture overview](../architecture/overview.md)).
+`diffConfigSections()` in `src/config/config-diff.ts` reports human-meaningful sections: `llm`, `contextCompaction`, `web`, `channels`, `sessionDefaults`. Only `sessionDefaults` (`workspace`, `agentsPath`, `defaultAgent`) are future-session defaults that do **not** require rebuilding the live runtime — the runtime layer uses `createRuntimeConfigSignature()` to make that distinction (see [architecture overview](../architecture/overview.md)). The `channels` section is reported by the diff but is **not** part of the runtime config signature, because the running gateway reads channel configuration once at startup and requires a restart to apply changes (see [channels and gateway](../integrations/channels.md)).
 
 ## Configuration loading
 
@@ -35,6 +35,7 @@ The config shape includes:
 - LLM configuration (`model`, `apiKey`, `temperature`, `maxTokens`, optional `reasoningEffort`)
 - default agent ID and agents path
 - context-compaction settings
+- channels configuration (`channels.telegram` with `enabled`, `botToken`, `allowedUserIds`)
 - optional Tavily API key
 
 ## Environment overrides
@@ -43,14 +44,15 @@ Sonny resolves each key with `process.env` first, then the dotenv file, then YAM
 
 - `llm.apiKey` from `LLM_API_KEY`
 - `tavilyApiKey` from `TAVILY_API_KEY`
+- `channels.telegram.botToken` from `TELEGRAM_BOT_TOKEN`
 
-Tavily remains optional and only enables `webSearch` and `webRead` when present. Keep both values out of tracked YAML and `.env` and never commit local runtime state.
+Tavily remains optional and only enables `webSearch` and `webRead` when present. `channels.telegram.enabled` must be set in YAML, and when enabled the schema requires both a `botToken` and at least one `allowedUserIds` entry; `TELEGRAM_BOT_TOKEN` is the supported way to supply the token without committing it. Keep all three values out of tracked YAML and `.env` and never commit local runtime state. A placeholder `.env.example` lists `LLM_API_KEY`, `TELEGRAM_BOT_TOKEN`, and `TAVILY_API_KEY`.
 
 `bunfig.toml` sets `env = false` so Bun does **not** auto-load `.env` into `process.env`; Sonny owns dotenv parsing so it can detect `.env` edits and keep `process.env` unmutated. `ConfigStore.open` uses `DEFAULT_CONFIG_PATH` (the bundled `src/config/config.yaml`) and `DEFAULT_ENV_PATH` (`$cwd/.env`), both exported from `src/config/index.ts`.
 
 ## Startup behavior
 
-`src/cli/main.ts` defines `main()`, which opens the `ConfigStore` before parsing arguments, constructs the `Command` program with a `createProgram(configStore)` factory, and passes `configStore` (not a static `config`) to `createAgentSession`. Startup failures are caught centrally in `main().catch()` and surface as a non-zero `process.exitCode`. The runtime uses the configured workspace for `.history` and `skills`, and `agentsPath` plus `defaultAgent` to locate `AGENT.md`. Session assembly and reload behavior are described in the [architecture overview](../architecture/overview.md).
+`src/cli/main.ts` defines `main()`, which opens the `ConfigStore` before parsing arguments, constructs the `Command` program with a `createProgram(configStore)` factory, and passes `configStore` (not a static `config`) to `createAgentSession`. The program registers two subcommands: `chat` (interactive TUI) and `gateway` (headless messaging channels — see [channels and gateway](../integrations/channels.md)). Startup failures are caught centrally in `main().catch()` and surface as a non-zero `process.exitCode`. The runtime uses the configured workspace for `.history` and `skills`, and `agentsPath` plus `defaultAgent` to locate `AGENT.md`. Session assembly and reload behavior are described in the [architecture overview](../architecture/overview.md).
 
 ## CI and documentation maintenance
 
@@ -65,6 +67,8 @@ Generated pages stay under `openwiki/`; keep runtime logs and workspace history 
 - `src/config/config-error.ts`
 - `src/config/load-config.ts`
 - `src/config/parse-config.ts`
+- `src/config/schemas/channels.schema.ts`
 - `src/config/index.ts`
+- `.env.example`
 - `bunfig.toml`
 - `src/cli/main.ts`

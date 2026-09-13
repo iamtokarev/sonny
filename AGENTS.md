@@ -5,6 +5,16 @@
 - Before finishing, run the relevant checks: `bun run check`, `bun run typecheck`, and `bun run test`.
 - Never commit credentials, local history, runtime logs, or generated runtime state.
 
+## Agent skills
+
+### Issue tracker
+
+Local Markdown tickets are stored in `tickets/`, with supporting specifications in `specs/`. These files are not committed automatically. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+This repository uses a single-context domain-documentation layout. See `docs/agents/domain.md`.
+
 <!-- OPENWIKI:START -->
 
 ## OpenWiki

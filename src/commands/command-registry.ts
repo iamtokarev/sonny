@@ -1,8 +1,14 @@
 import type {
+	ChannelControlIntent,
 	SlashCommand,
 	SlashCommandContext,
 	SlashCommandDispatchResult,
 } from "./command";
+
+export interface ChannelControlMatch {
+	readonly commandName: string;
+	readonly intent: ChannelControlIntent;
+}
 
 export class CommandRegistry {
 	private readonly commands = new Map<string, SlashCommand>();
@@ -32,26 +38,34 @@ export class CommandRegistry {
 		return Array.from(this.commands.values());
 	}
 
+	matchChannelControl(input: string): ChannelControlMatch | undefined {
+		const resolved = this.resolve(input);
+
+		if (
+			resolved === undefined ||
+			resolved.command?.channelControl === undefined
+		) {
+			return undefined;
+		}
+
+		const intent = resolved.command.channelControl(resolved.args);
+
+		return intent === undefined
+			? undefined
+			: { commandName: resolved.rawName, intent };
+	}
+
 	async dispatch(
 		input: string,
 		context: SlashCommandContext,
 	): Promise<SlashCommandDispatchResult> {
-		const trimmed = input.trim();
+		const resolved = this.resolve(input);
 
-		if (!trimmed.startsWith("/")) {
+		if (resolved === undefined) {
 			return { handled: false };
 		}
 
-		const withoutSlash = trimmed.slice(1);
-		const [rawName = "", ...argParts] = withoutSlash.split(/\s+/);
-		const name = rawName.trim();
-
-		if (name.length === 0) {
-			return { handled: false };
-		}
-
-		const commandName = this.aliases.get(name) ?? name;
-		const command = this.commands.get(commandName);
+		const { rawName: name, command, args } = resolved;
 
 		if (command === undefined) {
 			return {
@@ -63,11 +77,40 @@ export class CommandRegistry {
 			};
 		}
 
-		const args = argParts.join(" ");
-
 		return {
 			handled: true,
 			result: await command.execute(args, context),
+		};
+	}
+
+	private resolve(input: string):
+		| {
+				readonly rawName: string;
+				readonly commandName: string;
+				readonly command?: SlashCommand;
+				readonly args: string;
+		  }
+		| undefined {
+		const trimmed = input.trim();
+
+		if (!trimmed.startsWith("/")) {
+			return undefined;
+		}
+
+		const [rawName = "", ...argParts] = trimmed.slice(1).split(/\s+/);
+		const name = rawName.trim();
+
+		if (name.length === 0) {
+			return undefined;
+		}
+
+		const commandName = this.aliases.get(name) ?? name;
+
+		return {
+			rawName: name,
+			commandName,
+			command: this.commands.get(commandName),
+			args: argParts.join(" "),
 		};
 	}
 }

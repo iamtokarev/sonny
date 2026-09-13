@@ -9,11 +9,12 @@ import type {
 	BaseToolHookContext,
 	PermissionHook,
 	ToolHooks,
+	ToolPermissionRequest,
 } from "./hooks/tool-hooks";
 import { getToolCompletionStatus, type Tool, type ToolResult } from "./tool";
 import type { ToolRegistry } from "./tool-registry";
 
-export type ToolApprovalRequest = BaseToolHookContext;
+export type ToolApprovalRequest = ToolPermissionRequest;
 export type ToolApprovalDecision = Awaited<ReturnType<PermissionHook>>;
 export type ToolApprover = PermissionHook;
 
@@ -136,6 +137,7 @@ export class ToolExecutor {
 
 		for (const hook of this.hooks.preTool ?? []) {
 			const decision = await hook(createContext());
+			turnContext.signal?.throwIfAborted();
 
 			if (decision.action === "allow") {
 				continue;
@@ -188,6 +190,12 @@ export class ToolExecutor {
 			const decision = await permission({
 				...createContext(),
 				reason: permissionReason,
+				turn: {
+					sessionId: turnContext.sessionId,
+					turnId: turnContext.turnId,
+					source: turnContext.source,
+					signal: turnContext.signal,
+				},
 			});
 
 			if (!decision.approved) {
@@ -201,6 +209,8 @@ export class ToolExecutor {
 					turnContext,
 				});
 			}
+
+			turnContext.signal?.throwIfAborted();
 
 			logger.info("tool.permission.approved", {
 				toolName: call.name,

@@ -7,6 +7,21 @@ function formatReloadResult(result: RuntimeConfigurationResult): string {
 			return `Configuration is already current at revision ${result.revision}.`;
 
 		case "reloaded":
+			if (result.changedSections.includes("channels")) {
+				const channelRestartNotice = "Channel changes require gateway restart.";
+
+				if (!result.runtimeRebuilt) {
+					return `Configuration reloaded to revision ${result.revision}. ${channelRestartNotice}`;
+				}
+
+				return [
+					`Configuration reloaded to revision ${result.revision}.`,
+					`Model: ${result.info.model}.`,
+					`Tools: ${result.info.toolNames.join(", ")}.`,
+					channelRestartNotice,
+				].join(" ");
+			}
+
 			if (result.runtimeRebuilt) {
 				return [
 					`Configuration reloaded to revision ${result.revision}.`,

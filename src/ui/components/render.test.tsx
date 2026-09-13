@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToString } from "ink";
 import type { ReactNode } from "react";
-import { describeApproval } from "../approval";
+import { describeToolApproval } from "../../tools/tool-approval-description";
 import { describeUsage } from "../context-meter";
 import { createTextInputState, textInputReducer } from "../text-input";
 import { createTheme } from "../theme";
@@ -196,11 +196,16 @@ describe("ApprovalPane", () => {
 	test("shows a command verbatim and names what y does", () => {
 		const output = draw(
 			<ApprovalPane
-				approval={describeApproval({
+				approval={describeToolApproval({
 					toolCallId: "call-1",
 					toolName: "bash",
 					description: "run a shell command",
 					parameters: { command: "rm -rf .history" },
+					turn: {
+						sessionId: "session-1",
+						turnId: "turn-1",
+						source: { kind: "cli" },
+					},
 				})}
 			/>,
 		);
@@ -213,11 +218,16 @@ describe("ApprovalPane", () => {
 		expect(
 			draw(
 				<ApprovalPane
-					approval={describeApproval({
+					approval={describeToolApproval({
 						toolCallId: "call-1",
 						toolName: "writeFile",
 						description: "write a file",
 						parameters: { path: "theme.ts", content: "a" },
+						turn: {
+							sessionId: "session-1",
+							turnId: "turn-1",
+							source: { kind: "cli" },
+						},
 					})}
 				/>,
 			),

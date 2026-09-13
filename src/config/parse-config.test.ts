@@ -28,6 +28,91 @@ describe("parseConfig", () => {
 			protectedTailMessages: 6,
 			summaryMaxTokens: 4000,
 		});
+		expect(config.channels).toEqual({
+			telegram: {
+				enabled: false,
+				allowedUserIds: [],
+			},
+		});
+	});
+
+	test("applies a Telegram token override without other environment overrides", () => {
+		const config = parseConfig(
+			{
+				llm: {
+					model: "gpt-4.1",
+					apiKey: "configured-llm-key",
+				},
+				defaultAgent: "sonny",
+				channels: {
+					telegram: {
+						enabled: true,
+						botToken: "yaml-token",
+						allowedUserIds: ["123"],
+					},
+				},
+			},
+			{ telegramBotToken: "environment-token" },
+		);
+
+		expect(config.channels.telegram.botToken).toBe("environment-token");
+	});
+
+	test("rejects enabled Telegram without a bot token", () => {
+		expect(() =>
+			parseConfig(
+				{
+					llm: { model: "gpt-4.1" },
+					defaultAgent: "sonny",
+					channels: {
+						telegram: {
+							enabled: true,
+							allowedUserIds: ["123"],
+						},
+					},
+				},
+				{ llmApiKey: "test-key" },
+			),
+		).toThrow("TELEGRAM_BOT_TOKEN is required");
+	});
+
+	test("rejects enabled Telegram without allowed users", () => {
+		expect(() =>
+			parseConfig(
+				{
+					llm: { model: "gpt-4.1" },
+					defaultAgent: "sonny",
+					channels: {
+						telegram: {
+							enabled: true,
+							botToken: "telegram-token",
+						},
+					},
+				},
+				{ llmApiKey: "test-key" },
+			),
+		).toThrow("At least one Telegram user must be allowed");
+	});
+
+	test("permits disabled Telegram without a token or allowed users", () => {
+		const config = parseConfig(
+			{
+				llm: { model: "gpt-4.1" },
+				defaultAgent: "sonny",
+				channels: {
+					telegram: {
+						enabled: false,
+						allowedUserIds: [],
+					},
+				},
+			},
+			{ llmApiKey: "test-key" },
+		);
+
+		expect(config.channels.telegram).toEqual({
+			enabled: false,
+			allowedUserIds: [],
+		});
 	});
 
 	test("accepts an optional reasoningEffort and rejects an invalid one", () => {

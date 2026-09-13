@@ -18,7 +18,7 @@ export interface AgentTurnSession {
 
 export interface AgentRuntimeSession extends AgentTurnSession {
 	getMessageCount(): number;
-	getContextUsage(): ContextUsage;
+	getContextUsage(source: RuntimeSource): ContextUsage;
 	compactContext(turnContext: TurnContext): Promise<PreparedContext>;
 }
 
@@ -53,8 +53,8 @@ export class AgentRuntime {
 		return this.options.session.getMessageCount();
 	}
 
-	getContextUsage(): ContextUsage {
-		return this.options.session.getContextUsage();
+	getContextUsage(source: RuntimeSource = { kind: "cli" }): ContextUsage {
+		return this.options.session.getContextUsage(source);
 	}
 
 	/**
@@ -62,12 +62,13 @@ export class AgentRuntime {
 	 * agent remembers — so it reports through the same channel, under a source
 	 * that says who asked for it.
 	 */
-	compactContext(): Promise<PreparedContext> {
+	compactContext(
+		options: { readonly source?: RuntimeSource } = {},
+	): Promise<PreparedContext> {
 		return this.enqueue(async () => {
-			const turnContext = this.createTurnContext({
-				kind: "system",
-				name: "compact",
-			});
+			const turnContext = this.createTurnContext(
+				options.source ?? { kind: "system", name: "compact" },
+			);
 
 			await this.refreshConfiguration(false, turnContext);
 			return this.options.session.compactContext(turnContext);
@@ -119,9 +120,10 @@ export class AgentRuntime {
 			inputLength: input.content.length,
 		});
 		const startedAt = performance.now();
-		await this.refreshConfiguration(false, turnContext);
 
 		try {
+			await this.refreshConfiguration(false, turnContext);
+			input.signal?.throwIfAborted();
 			const content = await this.options.session.chat(
 				input.content,
 				turnContext,

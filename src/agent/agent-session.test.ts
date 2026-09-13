@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import type { ChatMessage, ToolCall } from "../domain";
-import type { RuntimeEventPublisher, TurnContext } from "../events";
+import type {
+	RuntimeEventPublisher,
+	RuntimeSource,
+	TurnContext,
+} from "../events";
 import type { HistoryRecorderSink } from "../history";
 import { writeFileTool } from "../tools/builtin/write-file-tool";
 import type { Tool } from "../tools/tool";
@@ -8,6 +12,14 @@ import { ToolExecutor } from "../tools/tool-executor";
 import { ToolRegistry } from "../tools/tool-registry";
 import { AgentSession } from "./agent-session";
 import { SessionState } from "./session-state";
+
+function createDeferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
 
 type FakeLLMResult = {
 	content: string;
@@ -77,11 +89,13 @@ const events: RuntimeEventPublisher = {
 	async publish() {},
 };
 
-function createTurnContext(): TurnContext {
+function createTurnContext(
+	source: RuntimeSource = { kind: "cli" },
+): TurnContext {
 	return {
 		sessionId: "session-1",
 		turnId: "turn-1",
-		source: { kind: "cli" },
+		source,
 		events,
 	};
 }
@@ -124,6 +138,72 @@ describe("AgentSession", () => {
 			{ role: "user", content: "Hello" },
 			{ role: "assistant", content: "Hello back" },
 		]);
+	});
+
+	test("uses one ephemeral channel prompt for context counting and the LLM", async () => {
+		const source: RuntimeSource = {
+			kind: "channel",
+			channel: "telegram",
+			conversationId: "conversation-secret-123",
+			conversationKind: "direct",
+			threadId: "thread-secret-456",
+			userId: "user-secret-789",
+		};
+		const preparedRequests: Array<{ systemPrompt: string }> = [];
+		const historyRecorder = new FakeHistoryRecorder();
+		const contextManager = {
+			recordUsage: () => {},
+			inspect: () => ({
+				tokenCount: 42,
+				contextWindowTokens: 200,
+				thresholdTokens: 150,
+				thresholdRatio: 0.75,
+			}),
+			prepare: async (request: { systemPrompt: string }) => {
+				preparedRequests.push(request);
+				return {
+					messages: state.getMessages(),
+					tokenCountBefore: 42,
+					tokenCountAfter: 42,
+					thresholdTokens: 150,
+					changed: false,
+					compactedToolResultCount: 0,
+					summaryCompactedMessageCount: 0,
+				};
+			},
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			historyRecorder,
+			contextManager,
+		);
+
+		await session.chat("Hello", createTurnContext(source));
+
+		const effectivePrompt = llm.calls[0]?.[0]?.content;
+		expect(effectivePrompt).toBe(preparedRequests[0]?.systemPrompt);
+		expect(effectivePrompt).toContain(
+			"You are responding through the telegram channel.",
+		);
+		expect(effectivePrompt).toContain(
+			"The current conversation is a direct conversation.",
+		);
+		for (const rawId of [
+			source.conversationId,
+			source.threadId as string,
+			source.userId,
+		]) {
+			expect(effectivePrompt).not.toContain(rawId);
+		}
+		expect(state.getMessages()).toEqual([
+			{ role: "user", content: "Hello" },
+			{ role: "assistant", content: "Hello back" },
+		]);
+		expect(historyRecorder.flushes).toEqual([state.getMessages()]);
 	});
 
 	test("executes tool calls and continues until final answer", async () => {
@@ -255,6 +335,126 @@ describe("AgentSession", () => {
 			{ id: "call_two", name: "read_test", parameters: {} },
 		]);
 		expect(resultIds).toEqual(["call_one", "call_two"]);
+	});
+
+	test("closes every tool call when an executor aborts and remains reusable", async () => {
+		const abort = new AbortController();
+		const preToolStarted = createDeferred<void>();
+		const releasePreTool = createDeferred<void>();
+		const tools = new ToolRegistry();
+		tools.register(testTool);
+		const toolExecutor = new ToolExecutor(tools, {
+			preTool: [
+				async () => {
+					preToolStarted.resolve(undefined);
+					await releasePreTool.promise;
+					return { action: "allow" };
+				},
+			],
+		});
+		const llm = new FakeLLM([
+			{
+				content: "",
+				stopReason: "tool_calls",
+				toolCalls: [
+					{ id: "call_one", name: "read_test", parameters: {} },
+					{ id: "call_two", name: "read_test", parameters: {} },
+				],
+			},
+			"Recovered",
+		]);
+		const historyRecorder = new FakeHistoryRecorder();
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			toolExecutor,
+			historyRecorder,
+		);
+		const interrupted = session.chat("Use tools", {
+			...createTurnContext(),
+			signal: abort.signal,
+		});
+		await preToolStarted.promise;
+		abort.abort();
+		releasePreTool.resolve(undefined);
+
+		await expect(interrupted).rejects.toHaveProperty("name", "AbortError");
+		const interruptedMessages = state.getMessages();
+		expect(
+			interruptedMessages
+				.filter((message) => message.role === "tool")
+				.map((message) => message.toolCallId),
+		).toEqual(["call_one", "call_two"]);
+		expect(historyRecorder.flushes).toEqual([interruptedMessages]);
+
+		await expect(session.chat("Try again", createTurnContext())).resolves.toBe(
+			"Recovered",
+		);
+		expect(llm.calls).toHaveLength(2);
+	});
+
+	test("records a denied result when cancellation interrupts pending approval", async () => {
+		const abort = new AbortController();
+		const tools = new ToolRegistry();
+		tools.register(testTool);
+		let markApprovalPending: (() => void) | undefined;
+		const approvalPending = new Promise<void>((resolve) => {
+			markApprovalPending = resolve;
+		});
+		const toolExecutor = new ToolExecutor(tools, {
+			preTool: [() => ({ action: "ask" })],
+			permission: (request) =>
+				new Promise((resolve) => {
+					expect(request.turn.signal).toBe(abort.signal);
+					request.turn.signal?.addEventListener(
+						"abort",
+						() =>
+							resolve({
+								approved: false,
+								reason: "Turn cancelled by user.",
+							}),
+						{ once: true },
+					);
+					markApprovalPending?.();
+				}),
+		});
+		const llm = new FakeLLM([
+			{
+				content: "",
+				stopReason: "tool_calls",
+				toolCalls: [{ id: "call_pending", name: "read_test", parameters: {} }],
+			},
+		]);
+		const historyRecorder = new FakeHistoryRecorder();
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			toolExecutor,
+			historyRecorder,
+		);
+
+		const chat = session.chat("Use a tool", {
+			...createTurnContext(),
+			signal: abort.signal,
+		});
+		await approvalPending;
+		abort.abort();
+
+		await expect(chat).rejects.toThrow();
+		const messages = state.getMessages();
+		expect(messages.at(-1)).toMatchObject({
+			role: "tool",
+			toolCallId: "call_pending",
+			status: "denied",
+		});
+		expect(
+			messages.at(-1)?.role === "tool" ? messages.at(-1)?.content : "",
+		).toContain("Turn cancelled by user.");
+		expect(historyRecorder.flushes).toEqual([messages]);
 	});
 
 	test("adds failed tool results to the conversation", async () => {
@@ -544,6 +744,53 @@ describe("AgentSession", () => {
 		]);
 	});
 
+	test("does not start a model request after cancellation during preparation", async () => {
+		const abort = new AbortController();
+		const preparationStarted = createDeferred<void>();
+		const releasePreparation = createDeferred<void>();
+		const contextManager = {
+			recordUsage: () => {},
+			inspect: () => ({
+				tokenCount: 100,
+				contextWindowTokens: 200,
+				thresholdTokens: 150,
+				thresholdRatio: 0.75,
+			}),
+			prepare: async () => {
+				preparationStarted.resolve(undefined);
+				await releasePreparation.promise;
+				return {
+					messages: state.getMessages(),
+					tokenCountBefore: 100,
+					tokenCountAfter: 100,
+					thresholdTokens: 150,
+					changed: false,
+					compactedToolResultCount: 0,
+					summaryCompactedMessageCount: 0,
+				};
+			},
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			undefined,
+			contextManager,
+		);
+		const chat = session.chat("Hello", {
+			...createTurnContext(),
+			signal: abort.signal,
+		});
+		await preparationStarted.promise;
+		abort.abort();
+		releasePreparation.resolve(undefined);
+
+		await expect(chat).rejects.toHaveProperty("name", "AbortError");
+		expect(llm.calls).toHaveLength(0);
+	});
+
 	test("does not rewrite history when prepared context is unchanged", async () => {
 		const historyRecorder = new FakeHistoryRecorder();
 		const contextManager = {
@@ -619,7 +866,7 @@ describe("AgentSession", () => {
 			contextManager,
 		);
 
-		expect(session.getContextUsage()).toEqual({
+		expect(session.getContextUsage({ kind: "cli" })).toEqual({
 			tokenCount: 42,
 			contextWindowTokens: 200,
 			thresholdTokens: 150,
@@ -632,6 +879,56 @@ describe("AgentSession", () => {
 				tools: tools.getSchemas(),
 			},
 		]);
+	});
+
+	test("counts channel context with the same identifier-free prompt shape", () => {
+		const inspectedRequests: Array<{ systemPrompt: string }> = [];
+		const contextManager = {
+			recordUsage: () => {},
+			inspect: (request: { systemPrompt: string }) => {
+				inspectedRequests.push(request);
+				return {
+					tokenCount: 42,
+					contextWindowTokens: 200,
+					thresholdTokens: 150,
+					thresholdRatio: 0.75,
+				};
+			},
+			prepare: async () => ({
+				messages: [],
+				tokenCountBefore: 42,
+				tokenCountAfter: 42,
+				thresholdTokens: 150,
+				changed: false,
+				compactedToolResultCount: 0,
+				summaryCompactedMessageCount: 0,
+			}),
+		};
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			undefined,
+			undefined,
+			undefined,
+			contextManager,
+		);
+
+		session.getContextUsage({
+			kind: "channel",
+			channel: "telegram",
+			conversationId: "conversation-secret",
+			conversationKind: "group",
+			threadId: "thread-secret",
+			userId: "user-secret",
+		});
+
+		expect(inspectedRequests[0]?.systemPrompt).toContain(
+			"The current conversation is a group conversation.",
+		);
+		expect(inspectedRequests[0]?.systemPrompt).not.toMatch(
+			/conversation-secret|thread-secret|user-secret/,
+		);
 	});
 
 	test("compactContext forces compaction and persists changed messages", async () => {
@@ -672,7 +969,15 @@ describe("AgentSession", () => {
 			contextManager,
 		);
 
-		const result = await session.compactContext(createTurnContext());
+		const result = await session.compactContext(
+			createTurnContext({
+				kind: "channel",
+				channel: "telegram",
+				conversationId: "conversation-1",
+				conversationKind: "direct",
+				userId: "user-1",
+			}),
+		);
 
 		expect(result.summaryCompactedMessageCount).toBe(3);
 		expect(state.getMessages()).toEqual(compactedMessages);
@@ -680,7 +985,9 @@ describe("AgentSession", () => {
 		expect(prepareCalls).toMatchObject([
 			{
 				request: {
-					systemPrompt: "You are Sonny.",
+					systemPrompt: expect.stringContaining(
+						"You are responding through the telegram channel.",
+					),
 					messages: [{ role: "user", content: "Hello" }],
 					tools: [],
 				},

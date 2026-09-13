@@ -1,3 +1,4 @@
+import type { RuntimeSource } from "../../events";
 import type { ToolResult } from "../tool";
 
 export type BaseToolHookContext = {
@@ -19,8 +20,16 @@ export type PreToolHook = (
 	context: PreToolContext,
 ) => PreToolDecision | Promise<PreToolDecision>;
 
+export interface ToolPermissionTurn {
+	readonly sessionId: string;
+	readonly turnId: string;
+	readonly source: RuntimeSource;
+	readonly signal?: AbortSignal;
+}
+
 export type ToolPermissionRequest = BaseToolHookContext & {
 	reason?: string;
+	turn: ToolPermissionTurn;
 };
 
 export type ToolPermissionDecision =

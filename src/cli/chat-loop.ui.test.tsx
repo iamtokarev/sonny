@@ -6,6 +6,10 @@ import type {
 	AgentTurnResult,
 	CreateAgentSessionResult,
 } from "../runtime";
+import type {
+	ToolApprovalDecision,
+	ToolApprover,
+} from "../tools/tool-executor";
 import {
 	createInkHarness,
 	enter,
@@ -221,6 +225,96 @@ describe("ChatApp runtime integration", () => {
 		}
 	});
 
+	test("approves, denies, and cancels pending approvals from the CLI", async () => {
+		const scenarios = [
+			{
+				key: "y",
+				expected: { approved: true },
+				aborted: false,
+			},
+			{
+				key: "n",
+				expected: {
+					approved: false,
+					reason: "Tool call denied by user.",
+				},
+				aborted: false,
+			},
+			{
+				key: "\u001b",
+				expected: {
+					approved: false,
+					reason: "Turn cancelled by user.",
+				},
+				aborted: true,
+			},
+		] as const;
+
+		for (const scenario of scenarios) {
+			let approveToolCall: ToolApprover | undefined;
+			let decision: ToolApprovalDecision | undefined;
+			let turnSignal: AbortSignal | undefined;
+			let markApprovalRequested: (() => void) | undefined;
+			const approvalRequested = new Promise<void>((resolve) => {
+				markApprovalRequested = resolve;
+			});
+			const runTurn: RunTurn = async (input) => {
+				turnSignal = input.signal;
+				if (approveToolCall === undefined) {
+					throw new Error("Tool approver was not initialized.");
+				}
+
+				const pendingDecision = approveToolCall({
+					toolCallId: "call-1",
+					toolName: "bash",
+					description: "run a shell command",
+					parameters: { command: "bun test" },
+					turn: {
+						sessionId: "session-1",
+						turnId: "turn-1",
+						source: input.source,
+						signal: input.signal,
+					},
+				});
+				markApprovalRequested?.();
+				decision = await pendingDecision;
+
+				return { turnId: "turn-1", content: "Done" };
+			};
+			const eventBus = new InMemoryRuntimeEventBus();
+			const harness = createInkHarness(
+				<ChatApp
+					eventBus={eventBus}
+					createSession={async (approver) => {
+						approveToolCall = approver;
+						return createSessionResult(runTurn);
+					}}
+				/>,
+			);
+
+			try {
+				await flush(harness);
+				await enter(harness, "use a tool");
+				await approvalRequested;
+				await flush(harness);
+				expect(harness.output()).toContain("$ bun test");
+
+				harness.stdin.write(scenario.key);
+				// Ink briefly buffers escape to distinguish it from an alt-key chord.
+				if (scenario.key === "\u001b") {
+					await Bun.sleep(30);
+				}
+				await flush(harness);
+
+				expect(decision).toEqual(scenario.expected);
+				expect(turnSignal?.aborted).toBe(scenario.aborted);
+			} finally {
+				harness.app.unmount();
+				await harness.app.waitUntilExit();
+			}
+		}
+	});
+
 	test("handles slash commands without starting a runtime turn", async () => {
 		const runTurn = mock(async () => ({
 			turnId: "turn-1",
@@ -244,10 +338,23 @@ describe("ChatApp runtime integration", () => {
 		const eventBus = new InMemoryRuntimeEventBus();
 		const reload = mock<ReloadConfiguration>(async (options) => {
 			eventBus.publish({
+				eventId: "config-poll-event-1",
+				sessionId: "session-1",
+				turnId: "poll-turn-1",
+				source: { kind: "system", name: "config-poll" },
+				occurredAt: "2026-01-01T00:00:00.000Z",
+				type: "config.reloaded",
+				revision: 2,
+				changedSections: ["llm"],
+				runtimeRebuilt: true,
+				model: "openai/poll-model",
+				toolNames: ["bash"],
+			});
+			eventBus.publish({
 				eventId: "config-event-1",
 				sessionId: "session-1",
 				turnId: "reload-turn-1",
-				source: { kind: "system", name: "reload" },
+				source: { kind: "cli" },
 				occurredAt: "2026-01-01T00:00:00.000Z",
 				type: "config.reloaded",
 				revision: 2,
@@ -259,7 +366,7 @@ describe("ChatApp runtime integration", () => {
 
 			expect(options).toEqual({
 				force: true,
-				source: { kind: "system", name: "reload" },
+				source: { kind: "cli" },
 			});
 
 			return {
@@ -283,6 +390,7 @@ describe("ChatApp runtime integration", () => {
 
 			expect(reload).toHaveBeenCalledTimes(1);
 			expect(runTurn).not.toHaveBeenCalled();
+			expect(harness.output()).toContain("Runtime: openai/poll-model");
 			expect(harness.output()).toContain("Runtime: anthropic/model-b");
 			expect(harness.output()).not.toContain(
 				"Configuration reloaded to revision 2.",

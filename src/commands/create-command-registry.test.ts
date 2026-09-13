@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { SlashCommandContext } from "./command";
-import { createDefaultCommandRegistry } from "./create-command-registry";
+import {
+	createChannelCommandRegistry,
+	createDefaultCommandRegistry,
+} from "./create-command-registry";
 
 function createContext(): SlashCommandContext {
 	return {
@@ -47,6 +50,16 @@ function createContext(): SlashCommandContext {
 }
 
 describe("createDefaultCommandRegistry", () => {
+	test("keeps channel-only session rotation out of the CLI registry", async () => {
+		const registry = createDefaultCommandRegistry();
+
+		expect(registry.matchChannelControl("/new")).toBeUndefined();
+		await expect(registry.dispatch("/new", createContext())).resolves.toEqual({
+			handled: true,
+			result: { type: "message", content: "Unknown command: /new" },
+		});
+	});
+
 	test("registers help command", async () => {
 		const registry = createDefaultCommandRegistry();
 		const result = await registry.dispatch("/help", createContext());
@@ -127,5 +140,40 @@ describe("createDefaultCommandRegistry", () => {
 				].join("\n"),
 			},
 		});
+	});
+});
+
+describe("createChannelCommandRegistry", () => {
+	test("registers canonical /new and /reset as typed channel controls", async () => {
+		const registry = createChannelCommandRegistry();
+
+		expect(registry.matchChannelControl("/new")).toEqual({
+			commandName: "new",
+			intent: "new-session",
+		});
+		expect(registry.matchChannelControl(" /reset ")).toEqual({
+			commandName: "reset",
+			intent: "new-session",
+		});
+		expect(registry.matchChannelControl("/new named")).toBeUndefined();
+		await expect(
+			registry.dispatch("/reset named", createContext()),
+		).resolves.toEqual({
+			handled: true,
+			result: { type: "message", content: "Usage: /new" },
+		});
+	});
+
+	test("advertises the canonical command and alias in channel help", async () => {
+		const registry = createChannelCommandRegistry();
+		const result = await registry.dispatch("/help", createContext());
+
+		expect(result).toMatchObject({ handled: true });
+		if (!result.handled || result.result.type !== "message") {
+			throw new Error("Expected help output.");
+		}
+		expect(result.result.content).toContain(
+			"/new (/reset) - Start a fresh session and preserve previous history.",
+		);
 	});
 });

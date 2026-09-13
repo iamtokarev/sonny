@@ -1,7 +1,7 @@
 ---
 type: Quickstart
 title: Sonny OpenWiki quickstart
-description: Entry point for the Sonny repository wiki. Explains the agent runtime, command flow, persistence, tools, context compaction, skills, web integration, and where to go next for deeper implementation details.
+description: Entry point for the Sonny repository wiki. Explains the agent runtime, command flow, persistence, tools, context compaction, skills, web integration, messaging channels and the gateway command, and where to go next for deeper implementation details.
 tags: [openwiki, quickstart, agent, cli, tools]
 resource: /openwiki/quickstart.md
 ---
@@ -15,6 +15,7 @@ Start here, then follow the linked pages for the major implementation areas:
 - [Architecture overview](architecture/overview.md) — how the CLI, runtime, session state, and tool execution fit together.
 - [Command and chat workflow](workflows/chat-and-commands.md) — how input moves from the TUI into the agent session and back.
 - [Tools and guardrails](integrations/tools.md) — built-in file, shell, skill, and optional Tavily web tools plus approval/policy hooks.
+- [Channels and gateway](integrations/channels.md) — messaging channel subsystem (Telegram adapter), persistent conversation→session bindings, remote tool approval via inline buttons, and the `gateway` command.
 - [Context and history](data/context-and-history.md) — persistence, resume/continue behavior, and compaction.
 - [Configuration and operations](operations/configuration.md) — config loading, the `ConfigStore` hot-reload store, workspace layout, CI, and the OpenWiki refresh workflow.
 - [Testing guide](testing.md) — verification commands, focused test areas, and regression checks.
@@ -22,19 +23,19 @@ Start here, then follow the linked pages for the major implementation areas:
 
 ## What this wiki covers
 
-The repository has evolved from a basic chat loop into a local agent platform. Recent work added tools, skills, JSONL persistence, slash commands, compaction, and web tools; the latest changes rebuilt the TUI around a component-based Mulberry design system (`src/ui/`), added real turn cancellation via `AbortSignal`, and surfaced context compaction through the event bus, so the wiki focuses on those seams rather than every source file.
+The repository has evolved from a basic chat loop into a local agent platform. Recent work added tools, skills, JSONL persistence, slash commands, compaction, and web tools; then rebuilt the TUI around a component-based Mulberry design system (`src/ui/`), added real turn cancellation via `AbortSignal`, and surfaced context compaction through the event bus. The latest changes added a **messaging channels** subsystem (`src/channels/`) with a Telegram adapter, a headless `gateway` CLI command, persistent conversation→session bindings, remote tool approval through inline buttons, a `/new` session-reset control, and a shared `SessionInteractor` input path, so the wiki focuses on those seams rather than every source file.
 
 ## How the runtime is organized
 
-At a high level, `src/cli/main.ts` opens the `ConfigStore` and starts the `chat` command, `src/cli/chat-loop.tsx` renders the declarative Ink TUI (built on the Mulberry design system in `src/ui/`), subscribes to events, and runs a 5-second config-reload poll, `src/runtime/agent-runtime.ts` serializes turns and compaction and emits lifecycle events (including `turn.cancelled` for aborted turns and `config.reloaded` / `config.reload.failed` for reloads), `src/runtime/reloadable-agent-session.ts` wraps the live agent session so an edited config can rebuild the runtime in place, and `src/runtime/create-agent-session.ts` wires together config, skills, history, tool registry, hooks, the LLM provider, the context manager, and the event bus.
+At a high level, `src/cli/main.ts` opens the `ConfigStore` and starts either the `chat` (interactive TUI) or `gateway` (headless messaging channels) command, `src/cli/chat-loop.tsx` renders the declarative Ink TUI (built on the Mulberry design system in `src/ui/`), subscribes to events, and runs a 5-second config-reload poll, `src/runtime/agent-runtime.ts` serializes turns and compaction and emits lifecycle events (including `turn.cancelled` for aborted turns and `config.reloaded` / `config.reload.failed` for reloads), `src/runtime/reloadable-agent-session.ts` wraps the live agent session so an edited config can rebuild the runtime in place, and `src/runtime/create-agent-session.ts` wires together config, skills, history, tool registry, hooks, the LLM provider, the context manager, and the event bus.
 
 The central flow is:
 
 1. The CLI resolves `chat --resume` or `chat --continue` options.
 2. `createAgentSession()` loads or creates a history session, calls `configStore.refresh()` to seed a snapshot, defines an `AgentSessionBuilder` factory, wraps it in `ReloadableAgentSession`, and wraps that in `AgentRuntime`.
-3. The chat loop accepts user text or slash commands.
+3. The chat loop accepts user text or slash commands (both routed through a shared `SessionInteractor` that serializes them per session).
 4. Slash commands are handled deterministically before any model call.
-5. Regular chat input goes through `AgentRuntime.runTurn()`, which creates a `TurnContext` (carrying an `AbortSignal` for cancellation), publishes `turn.started`, then refreshes configuration before delegating to `AgentSession.chat()`. The refresh may rebuild the live runtime (swapping LLM/tools/context manager) and emits `config.reloaded` or `config.reload.failed`.
+5. Regular chat input goes through `AgentRuntime.runTurn()`, which creates a `TurnContext` (carrying an `AbortSignal` for cancellation and a `RuntimeSource` — `cli` for the TUI, `channel` for the gateway), publishes `turn.started`, then refreshes configuration before delegating to `AgentSession.chat()`. The refresh may rebuild the live runtime (swapping LLM/tools/context manager) and emits `config.reloaded` or `config.reload.failed`.
 6. Model tool calls are executed through `ToolExecutor`, which applies policy, approval, and result transforms, and publishes `tool.started` / `tool.completed` events.
 7. History is persisted to JSONL and can later be resumed or compacted.
 
@@ -44,6 +45,7 @@ The central flow is:
 - [Tool registry and executor](integrations/tools.md) — where capabilities are registered and run.
 - [Context compaction](data/context-and-history.md#compaction) — how long conversations stay within token limits.
 - [Config hot-reload](operations/configuration.md) — how `ConfigStore` detects edits and `ReloadableAgentSession` rebuilds the running runtime.
+- [Channels and gateway](integrations/channels.md) — how Sonny runs as a headless messaging agent over Telegram, with persistent conversation bindings and remote tool approval.
 - **Skills** — repository-local `workspace/skills/**/SKILL.md` files become a prompt catalog on new sessions and are loaded in full through `loadSkill`.
 - **Web tools** — optional Tavily-backed search and page extraction are documented with the rest of the tool extension and safety boundary.
 
@@ -68,6 +70,13 @@ If you want to jump straight into code, start with these files:
 - `src/config/config-store.ts`
 - `src/config/load-config.ts`
 - `src/commands/builtin/reload-command.ts`
+- `src/channels/channel-gateway.ts`
+- `src/channels/create-channel-gateway.ts`
+- `src/channels/channel-approval-broker.ts`
+- `src/channels/channel-session-directory.ts`
+- `src/channels/telegram/telegram-adapter.ts`
+- `src/conversation/session-interactor.ts`
+- `src/cli/gateway-command.ts`
 - `src/ui/key-router.ts`
 - `src/ui/tool-row.ts`
 - `src/ui/transcript.ts`
@@ -83,6 +92,11 @@ If you want to jump straight into code, start with these files:
 | Tool registry / guardrails | [tools and guardrails](integrations/tools.md) | `src/tools/create-tool-registry.ts`, `src/tools/tool-executor.ts` | `ToolExecutor.execute`, `ToolCompletionStatus` | `tool-executor` tests, `default-tool-hooks` tests | `bun test src/tools` |
 | Context compaction | [context and history](data/context-and-history.md) | `src/context/context-manager.ts`, `src/context/token-counter.ts` | `ContextManager.prepare`, `context.compaction.*` events | context-manager tests | `bun test src/context` |
 | Resume / continue | [chat workflow](workflows/chat-and-commands.md), [context and history](data/context-and-history.md) | `src/cli/main.ts`, `src/history/history-store.ts`, `src/runtime/create-agent-session.ts` | `resolveChatSessionSelection`, `CreateAgentSessionMode` | `create-agent-session.test.ts` (resume/continue) | `bun test src/runtime/create-agent-session.test.ts` |
+| Channels / gateway | [channels and gateway](integrations/channels.md), [gateway workflow](workflows/channel-gateway-workflow.md) | `src/channels/channel-gateway.ts`, `src/channels/create-channel-gateway.ts`, `src/cli/gateway-command.ts` | `ChannelGateway.run`, `createChannelGateway`, `createChannelAccessCheck`, `ChannelSessionDirectory` | `channel-gateway.test.ts`, `create-channel-gateway.test.ts`, `gateway-command.test.ts` | `bun test src/channels/channel-gateway.test.ts src/channels/create-channel-gateway.test.ts src/cli/gateway-command.test.ts` |
+| Channel session binding / reset | [channels and gateway](integrations/channels.md) | `src/channels/channel-session-directory.ts`, `src/channels/channel-session-binding-store.ts` | `ChannelSessionDirectory.getOrCreate`/`replace`, `createChannelSessionKey`, `ChannelSessionBindingStore` | `channel-session-directory.test.ts`, `channel-session-binding-store.test.ts` | `bun test src/channels/channel-session-directory.test.ts src/channels/channel-session-binding-store.test.ts` |
+| Remote tool approval | [channels and gateway](integrations/channels.md) | `src/channels/channel-approval-broker.ts`, `src/tools/tool-approval-description.ts` | `ChannelApprovalBroker.request`/`resolve`, `describeToolApproval` | `channel-approval-broker.test.ts` | `bun test src/channels/channel-approval-broker.test.ts` |
+| Telegram adapter | [channels and gateway](integrations/channels.md) | `src/channels/telegram/telegram-adapter.ts`, `src/channels/telegram/telegram-text.ts` | `TelegramAdapter.run`/`send`, `splitTelegramText` | `telegram-adapter.test.ts`, `telegram-text.test.ts` | `bun test src/channels/telegram` |
+| Channel config / env override | [configuration](operations/configuration.md) | `src/config/schemas/channels.schema.ts`, `src/config/parse-config.ts`, `src/config/load-config.ts` | `ChannelsConfigSchema`, `telegramBotToken` override, `diffConfigSections` `channels` | `parse-config.test.ts`, `load-config.test.ts`, `config-diff.test.ts` | `bun test src/config` |
 | TUI rendering | [architecture overview](architecture/overview.md) | `src/ui/*`, `src/ui/components/*` | `routeKey`, `TranscriptItem`, `restoreTranscript` | `chat-loop.ui.test.tsx`, `ui/*` pure-logic tests | `bun test src/ui` |
 
 ## Backlog
