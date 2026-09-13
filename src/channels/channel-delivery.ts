@@ -13,7 +13,7 @@ export class ChannelDelivery {
 		this.adaptersByName = new Map(entries);
 	}
 
-	async send(output: ChannelOutput): Promise<void> {
+	async send(output: ChannelOutput, signal?: AbortSignal): Promise<void> {
 		const adapter = this.adaptersByName.get(output.target.channel);
 
 		if (adapter === undefined) {
@@ -22,6 +22,6 @@ export class ChannelDelivery {
 			);
 		}
 
-		await adapter.send(output);
+		await adapter.send(output, signal);
 	}
 }

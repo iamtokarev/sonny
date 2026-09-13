@@ -29,6 +29,7 @@ export class ChannelSessionDirectory {
 		Promise<ChannelConversationSession>
 	>();
 	private readonly bindingKeysBySessionId = new Map<string, Set<string>>();
+	private readonly sessionIdByBindingKey = new Map<string, string>();
 
 	constructor(
 		private readonly bindings: ChannelSessionBindingStore,
@@ -58,11 +59,47 @@ export class ChannelSessionDirectory {
 		return acquisition;
 	}
 
+	async replace(
+		source: ChannelSource,
+		signal?: AbortSignal,
+	): Promise<ChannelConversationSession> {
+		if (signal?.aborted) {
+			throw replacementAborted();
+		}
+
+		const bindingKey = createChannelSessionKey(source);
+		const previousSessionId = this.sessionIdByBindingKey.get(bindingKey);
+		const replacement = this.toConversationSession(
+			await this.createSession({}),
+		);
+
+		if (signal?.aborted) {
+			throw replacementAborted();
+		}
+
+		await this.bindings.bind(source, replacement.sessionId);
+
+		if (
+			previousSessionId !== undefined &&
+			previousSessionId !== replacement.sessionId
+		) {
+			this.forgetBinding(bindingKey, previousSessionId);
+		}
+
+		const published = Promise.resolve(replacement);
+		this.bySessionId.set(replacement.sessionId, published);
+		this.byBindingKey.set(bindingKey, published);
+		this.rememberBinding(bindingKey, replacement.sessionId);
+
+		return replacement;
+	}
+
 	evict(sessionId: string): void {
 		this.bySessionId.delete(sessionId);
 
 		for (const bindingKey of this.bindingKeysBySessionId.get(sessionId) ?? []) {
 			this.byBindingKey.delete(bindingKey);
+			this.sessionIdByBindingKey.delete(bindingKey);
 		}
 
 		this.bindingKeysBySessionId.delete(sessionId);
@@ -158,5 +195,26 @@ export class ChannelSessionDirectory {
 			this.bindingKeysBySessionId.get(sessionId) ?? new Set<string>();
 		keys.add(bindingKey);
 		this.bindingKeysBySessionId.set(sessionId, keys);
+		this.sessionIdByBindingKey.set(bindingKey, sessionId);
 	}
+
+	private forgetBinding(bindingKey: string, sessionId: string): void {
+		const keys = this.bindingKeysBySessionId.get(sessionId);
+
+		if (keys === undefined) {
+			return;
+		}
+
+		keys.delete(bindingKey);
+		if (keys.size === 0) {
+			this.bindingKeysBySessionId.delete(sessionId);
+			this.bySessionId.delete(sessionId);
+		}
+	}
+}
+
+function replacementAborted(): Error {
+	const error = new Error("Channel session replacement was cancelled.");
+	error.name = "AbortError";
+	return error;
 }

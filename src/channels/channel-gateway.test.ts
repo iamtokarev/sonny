@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CommandRegistry } from "../commands/command-registry";
+import { createChannelCommandRegistry } from "../commands/create-command-registry";
 import type {
 	AgentTurnInput,
 	AgentTurnResult,
@@ -53,6 +53,7 @@ class FakeAdapter implements ChannelAdapter {
 		readonly name: string,
 		private readonly deliver: (
 			output: ChannelOutput,
+			signal?: AbortSignal,
 		) => Promise<void> = async () => {},
 		private readonly abortFailure?: Error,
 	) {}
@@ -83,11 +84,11 @@ class FakeAdapter implements ChannelAdapter {
 		return this.completion.promise;
 	}
 
-	async send(output: ChannelOutput): Promise<void> {
+	async send(output: ChannelOutput, signal?: AbortSignal): Promise<void> {
 		this.sent.push(output);
 		this.sendStarted.resolve(undefined);
 		await this.sendGate;
-		await this.deliver(output);
+		await this.deliver(output, signal);
 	}
 
 	emit(event: ChannelEvent): Promise<void> {
@@ -242,19 +243,31 @@ async function createHarness(
 			approvals: ChannelApprovalBroker,
 		) => Promise<AgentTurnResult>;
 		readonly beforeCreateSession?: () => Promise<void>;
+		readonly initialBindings?: readonly {
+			readonly source: ChannelSource;
+			readonly sessionId: string;
+		}[];
+		readonly createSession?: (
+			options: { resumeSessionId?: string },
+			suggestedSessionId: string,
+			runTurn: (input: AgentTurnInput) => Promise<AgentTurnResult>,
+		) => Promise<CreateAgentSessionResult>;
 	} = {},
 ): Promise<GatewayHarness> {
 	const adapters = options.adapters ?? [new FakeAdapter("telegram")];
 	const adapter = adapters[0] as FakeAdapter;
 	const delivery = new ChannelDelivery(adapters);
-	const approvals = new ChannelApprovalBroker((output) =>
-		delivery.send(output),
+	const approvals = new ChannelApprovalBroker((output, signal) =>
+		delivery.send(output, signal),
 	);
 	const workspace = await mkdtemp(join(tmpdir(), "sonny-channel-gateway-"));
 	const bindings = new ChannelSessionBindingStore(
 		join(workspace, ".history", "channels", "bindings.json"),
 	);
-	const commands = new CommandRegistry();
+	for (const binding of options.initialBindings ?? []) {
+		await bindings.bind(binding.source, binding.sessionId);
+	}
+	const commands = createChannelCommandRegistry();
 	commands.register({
 		name: "echo",
 		description: "Echo text.",
@@ -283,7 +296,7 @@ async function createHarness(
 		const sessionId =
 			createOptions.resumeSessionId ?? `session-${nextSession++}`;
 
-		return sessionResult(sessionId, async (input) => {
+		const runTurn = async (input: AgentTurnInput) => {
 			turnInputs.push(input);
 			return (
 				options.runTurn?.(input, sessionId, approvals) ?? {
@@ -291,7 +304,11 @@ async function createHarness(
 					content: `Reply to ${input.content}`,
 				}
 			);
-		});
+		};
+
+		return options.createSession
+			? options.createSession(createOptions, sessionId, runTurn)
+			: sessionResult(sessionId, runTurn);
 	};
 	const sessions = new ChannelSessionDirectory(
 		bindings,
@@ -309,6 +326,7 @@ async function createHarness(
 		delivery,
 		sessions,
 		approvals,
+		commands,
 		isAllowed: options.isAllowed ?? (() => true),
 	});
 	const controller = new AbortController();
@@ -580,6 +598,508 @@ describe("ChannelGateway text handling", () => {
 		expect(harness.turnInputs).toHaveLength(0);
 		expect(harness.adapter.sent.map(({ text }) => text)).toEqual(["hello"]);
 		await harness.stop();
+	});
+
+	test("starts a fresh bound session through /new without a model turn", async () => {
+		const harness = await createHarness();
+
+		await harness.adapter.emit(
+			message("conversation-1", "/new", { messageId: "reset-1" }),
+		);
+		await harness.adapter.emit(message("conversation-1", "/session"));
+
+		expect(harness.createCalls).toEqual([{}]);
+		expect(harness.turnInputs).toHaveLength(0);
+		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+			"Started a new session. Previous history is preserved.",
+			["Session: session-1", "Title: Channel test", "Messages: 0"].join("\n"),
+		]);
+		expect(
+			(await harness.bindings.get(source("conversation-1")))?.sessionId,
+		).toBe("session-1");
+		await harness.stop();
+	});
+
+	test("treats malformed /new arguments as an ordinary usage response", async () => {
+		const harness = await createHarness();
+
+		await harness.adapter.emit(message("conversation-1", "/new named"));
+
+		expect(harness.createCalls).toEqual([{}]);
+		expect(harness.turnInputs).toHaveLength(0);
+		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+			"Usage: /new",
+		]);
+		expect(
+			(await harness.bindings.get(source("conversation-1")))?.sessionId,
+		).toBe("session-1");
+		await harness.stop();
+	});
+
+	test("interrupts A, discards queued B, confirms reset, then runs C in the replacement", async () => {
+		const turnStarted = deferred<void>();
+		const releaseTurn = deferred<void>();
+		let turnSignal: AbortSignal | undefined;
+		const harness = await createHarness({
+			runTurn: async (input, sessionId) => {
+				if (input.content === "A") {
+					turnSignal = input.signal;
+					turnStarted.resolve(undefined);
+					await releaseTurn.promise;
+				}
+				return {
+					turnId: `turn-${sessionId}`,
+					content: `${sessionId}:${input.content}`,
+				};
+			},
+		});
+		const a = harness.adapter.emit(message("conversation-1", "A"));
+		await turnStarted.promise;
+		const b = harness.adapter.emit(message("conversation-1", "B"));
+		const reset = harness.adapter.emit(message("conversation-1", "/reset"));
+		const c = harness.adapter.emit(message("conversation-1", "C"));
+
+		expect(turnSignal?.aborted).toBe(true);
+		expect(harness.createCalls).toEqual([{}]);
+		releaseTurn.resolve(undefined);
+		await Promise.all([a, b, reset, c]);
+
+		expect(harness.createCalls).toEqual([{}, {}]);
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual([
+			"A",
+			"C",
+		]);
+		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+			"Started a new session. Previous history is preserved. Interrupted active work. Discarded 1 queued message.",
+			"session-2:C",
+		]);
+		expect(
+			(await harness.bindings.get(source("conversation-1")))?.sessionId,
+		).toBe("session-2");
+		await harness.stop();
+	});
+
+	test("serializes concurrent resets and attributes queued discards to the later reset", async () => {
+		const harness = await createHarness();
+
+		const first = harness.adapter.emit(message("conversation-1", "/new"));
+		const between = harness.adapter.emit(message("conversation-1", "between"));
+		const second = harness.adapter.emit(message("conversation-1", "/reset"));
+		const after = harness.adapter.emit(message("conversation-1", "after"));
+		await Promise.all([first, between, second, after]);
+
+		expect(harness.createCalls).toEqual([{}, {}]);
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual(["after"]);
+		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+			"Started a new session. Previous history is preserved.",
+			"Started a new session. Previous history is preserved. Discarded 1 queued message.",
+			"Reply to after",
+		]);
+		expect(
+			(await harness.bindings.get(source("conversation-1")))?.sessionId,
+		).toBe("session-2");
+		await harness.stop();
+	});
+
+	test("resetting one binding leaves another shared interactor and approval untouched", async () => {
+		const approvalRequested = deferred<void>();
+		const firstSource = source("conversation-1");
+		const secondSource = source("conversation-2");
+		const harness = await createHarness({
+			initialBindings: [
+				{ source: firstSource, sessionId: "shared-session" },
+				{ source: secondSource, sessionId: "shared-session" },
+			],
+			runTurn: approvalRunTurn(approvalRequested),
+		});
+		const otherTurn = harness.adapter.emit(
+			message("conversation-2", "needs approval"),
+		);
+		await approvalRequested.promise;
+		const otherSignal = harness.turnInputs[0]?.signal;
+		const approval = harness.adapter.sent.find(
+			(output) => output.target.conversationId === "conversation-2",
+		);
+		if (!approval) {
+			throw new Error("Expected the other conversation approval.");
+		}
+
+		const queuedForReset = harness.adapter.emit(
+			message("conversation-1", "queued behind shared runtime"),
+		);
+		await Promise.resolve();
+		const reset = harness.adapter.emit(message("conversation-1", "/new"));
+		await Promise.all([queuedForReset, reset]);
+
+		expect(otherSignal?.aborted).toBe(false);
+		expect(harness.turnInputs.map(({ content }) => content)).toEqual([
+			"needs approval",
+		]);
+		expect(harness.createCalls).toEqual([
+			{ resumeSessionId: "shared-session" },
+			{},
+		]);
+		expect((await harness.bindings.get(firstSource))?.sessionId).toBe(
+			"session-1",
+		);
+		expect((await harness.bindings.get(secondSource))?.sessionId).toBe(
+			"shared-session",
+		);
+
+		await harness.adapter.emit(
+			action("conversation-2", outputAction(approval, "Approve")),
+		);
+		await otherTurn;
+		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+			approval.text,
+			"Started a new session. Previous history is preserved. Discarded 1 queued message.",
+			"Tool approved.",
+		]);
+		await harness.stop();
+	});
+
+	test("an old approval action cannot approve a replacement-session request", async () => {
+		const requested = [deferred<void>(), deferred<void>()];
+		let requestIndex = 0;
+		const harness = await createHarness({
+			runTurn: async (input, sessionId, approvals) => {
+				const index = requestIndex++;
+				const decision = approvals.request({
+					toolCallId: `call-${index}`,
+					toolName: "bash",
+					description: "Run a command",
+					parameters: { command: "bun test" },
+					turn: {
+						sessionId,
+						turnId: `turn-${index}`,
+						source: input.source,
+						signal: input.signal,
+					},
+				});
+				requested[index]?.resolve(undefined);
+				const result = await decision;
+				return {
+					turnId: `turn-${index}`,
+					content: result.approved ? "approved" : "denied",
+				};
+			},
+		});
+		const oldTurn = harness.adapter.emit(message("conversation-1", "old"));
+		await requested[0]?.promise;
+		const oldPrompt = harness.adapter.sent[0] as ChannelOutput;
+		const reset = harness.adapter.emit(message("conversation-1", "/new"));
+		await Promise.all([oldTurn, reset]);
+		const newTurn = harness.adapter.emit(message("conversation-1", "new"));
+		await requested[1]?.promise;
+		const newPrompt = harness.adapter.sent.find(
+			(output) =>
+				output.actions !== undefined &&
+				outputAction(output, "Approve") !== outputAction(oldPrompt, "Approve"),
+		);
+		if (!newPrompt) {
+			throw new Error("Expected a replacement-session approval prompt.");
+		}
+		let newTurnSettled = false;
+		void newTurn.then(() => {
+			newTurnSettled = true;
+		});
+
+		await harness.adapter.emit(
+			action("conversation-1", outputAction(oldPrompt, "Approve")),
+		);
+		await Promise.resolve();
+		expect(newTurnSettled).toBe(false);
+		await harness.adapter.emit(
+			action("conversation-1", outputAction(newPrompt, "Approve")),
+		);
+		await newTurn;
+		expect(harness.adapter.sent.at(-1)?.text).toBe("approved");
+		await harness.stop();
+	});
+
+	test("waits for only the retiring conversation's detached approval delivery", async () => {
+		const oldDelivery = deferred<void>();
+		const otherDelivery = deferred<void>();
+		const approvalSignals = new Map<string, AbortSignal>();
+		const approvalChunks: string[] = [];
+		const adapter = new FakeAdapter("telegram", async (output, signal) => {
+			if (!output.actions || !signal) {
+				return;
+			}
+			approvalSignals.set(output.target.conversationId, signal);
+			approvalChunks.push(`${output.target.conversationId}:chunk-1`);
+			await (output.target.conversationId === "conversation-1"
+				? oldDelivery.promise
+				: otherDelivery.promise);
+			if (!signal.aborted) {
+				approvalChunks.push(`${output.target.conversationId}:chunk-2`);
+			}
+		});
+		const approvalsStarted = [deferred<void>(), deferred<void>()];
+		const harness = await createHarness({
+			adapters: [adapter],
+			runTurn: async (input, sessionId, approvals) => {
+				if (input.source.kind !== "channel") {
+					throw new Error("Expected a channel source.");
+				}
+				const index = input.source.conversationId === "conversation-1" ? 0 : 1;
+				const decision = approvals.request({
+					toolCallId: `call-${index}`,
+					toolName: "bash",
+					description: "Run a command",
+					parameters: { command: "bun test" },
+					turn: {
+						sessionId,
+						turnId: `turn-${index}`,
+						source: input.source,
+						signal: input.signal,
+					},
+				});
+				approvalsStarted[index]?.resolve(undefined);
+				await decision;
+				return { turnId: `turn-${index}`, content: "old reply" };
+			},
+		});
+		const oldTurn = adapter.emit(message("conversation-1", "old approval"));
+		const otherTurn = adapter.emit(message("conversation-2", "other approval"));
+		await Promise.all(approvalsStarted.map(({ promise }) => promise));
+		const oldPrompt = adapter.sent.find(
+			(output) => output.target.conversationId === "conversation-1",
+		);
+		const otherPrompt = adapter.sent.find(
+			(output) => output.target.conversationId === "conversation-2",
+		);
+		if (!oldPrompt || !otherPrompt) {
+			throw new Error("Expected both approval prompts.");
+		}
+
+		const clicked = adapter.emit(
+			action("conversation-1", outputAction(oldPrompt, "Approve")),
+		);
+		const reset = adapter.emit(message("conversation-1", "/new"));
+		await clicked;
+		await Promise.resolve();
+		expect(approvalSignals.get("conversation-1")?.aborted).toBe(true);
+		expect(approvalSignals.get("conversation-2")?.aborted).toBe(false);
+		expect(
+			adapter.sent.some(({ text }) => text.startsWith("Started a new session")),
+		).toBe(false);
+
+		oldDelivery.resolve(undefined);
+		await Promise.all([oldTurn, reset]);
+		expect(
+			approvalChunks.filter((chunk) => chunk.startsWith("conversation-1")),
+		).toEqual(["conversation-1:chunk-1"]);
+		expect(
+			adapter.sent.some(({ text }) => text.startsWith("Started a new session")),
+		).toBe(true);
+		expect(approvalSignals.get("conversation-2")?.aborted).toBe(false);
+
+		await adapter.emit(
+			action("conversation-2", outputAction(otherPrompt, "Deny")),
+		);
+		otherDelivery.resolve(undefined);
+		await otherTurn;
+		expect(
+			approvalChunks.filter((chunk) => chunk.startsWith("conversation-2")),
+		).toEqual(["conversation-2:chunk-1", "conversation-2:chunk-2"]);
+		await harness.stop();
+	});
+
+	test("waits for an issued old reply chunk and suppresses later chunks before confirmation", async () => {
+		const firstChunk = deferred<void>();
+		const releaseChunk = deferred<void>();
+		const chunks: string[] = [];
+		const adapter = new FakeAdapter("telegram", async (output, signal) => {
+			const parts = [
+				output.text.slice(0, 4_000),
+				output.text.slice(4_000),
+			].filter((part) => part.length > 0);
+			for (const [index, part] of parts.entries()) {
+				if (signal?.aborted) {
+					return;
+				}
+				chunks.push(part);
+				if (output.text.startsWith("old") && index === 0) {
+					firstChunk.resolve(undefined);
+					await releaseChunk.promise;
+				}
+			}
+		});
+		const harness = await createHarness({
+			adapters: [adapter],
+			runTurn: async () => ({
+				turnId: "turn-1",
+				content: `old${"x".repeat(4_000)}`,
+			}),
+		});
+		const old = adapter.emit(message("conversation-1", "old"));
+		await firstChunk.promise;
+		const reset = adapter.emit(message("conversation-1", "/new"));
+		await Promise.resolve();
+		expect(chunks).toEqual([`old${"x".repeat(3_997)}`]);
+
+		releaseChunk.resolve(undefined);
+		await Promise.all([old, reset]);
+		expect(chunks).toEqual([
+			`old${"x".repeat(3_997)}`,
+			"Started a new session. Previous history is preserved. Interrupted active work.",
+		]);
+		await harness.stop();
+	});
+
+	test("reports fresh-session creation failure safely and allows a retry", async () => {
+		let failed = false;
+		const harness = await createHarness({
+			createSession: async (_options, sessionId, runTurn) => {
+				if (!failed) {
+					failed = true;
+					throw new Error("creation failed with private data");
+				}
+				return sessionResult(sessionId, runTurn);
+			},
+		});
+
+		await harness.adapter.emit(message("conversation-1", "/new"));
+		await harness.adapter.emit(message("conversation-1", "/reset"));
+
+		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+			"Sorry, I could not start a new session. The previous session remains available.",
+			"Started a new session. Previous history is preserved.",
+		]);
+		expect(
+			(await harness.bindings.get(source("conversation-1")))?.sessionId,
+		).toBe("session-2");
+		await harness.stop();
+	});
+
+	test("keeps the old binding and cache usable after binding-write failure", async () => {
+		const harness = await createHarness({
+			runTurn: async (input, sessionId) => ({
+				turnId: `turn-${sessionId}`,
+				content: `${sessionId}:${input.content}`,
+			}),
+		});
+		await harness.adapter.emit(message("conversation-1", "before"));
+		const bind = harness.bindings.bind.bind(harness.bindings);
+		let rejectReplacement = true;
+		harness.bindings.bind = async (candidate, sessionId) => {
+			if (rejectReplacement) {
+				rejectReplacement = false;
+				throw new Error("binding write failed");
+			}
+			return bind(candidate, sessionId);
+		};
+
+		await harness.adapter.emit(message("conversation-1", "/new"));
+		await harness.adapter.emit(message("conversation-1", "still old"));
+		await harness.adapter.emit(message("conversation-1", "/new"));
+
+		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+			"session-1:before",
+			"Sorry, I could not start a new session. The previous session remains available.",
+			"session-1:still old",
+			"Started a new session. Previous history is preserved.",
+		]);
+		expect(
+			(await harness.bindings.get(source("conversation-1")))?.sessionId,
+		).toBe("session-3");
+		await harness.stop();
+	});
+
+	test("retains a committed replacement when confirmation delivery fails", async () => {
+		const failure = new Error("confirmation transport failed");
+		const adapter = new FakeAdapter("telegram", async (output) => {
+			if (output.text.startsWith("Started a new session")) {
+				throw failure;
+			}
+		});
+		const harness = await createHarness({ adapters: [adapter] });
+
+		await expect(adapter.emit(message("conversation-1", "/new"))).rejects.toBe(
+			failure,
+		);
+		await adapter.emit(message("conversation-1", "after failure"));
+
+		expect(
+			(await harness.bindings.get(source("conversation-1")))?.sessionId,
+		).toBe("session-1");
+		expect(adapter.sent.map(({ text }) => text)).toEqual([
+			"Started a new session. Previous history is preserved.",
+			"Reply to after failure",
+		]);
+		await harness.stop();
+	});
+
+	test("stop while reset waits for old non-abortable work prevents replacement and confirmation", async () => {
+		const turnStarted = deferred<void>();
+		const releaseTurn = deferred<void>();
+		const harness = await createHarness({
+			runTurn: async () => {
+				turnStarted.resolve(undefined);
+				await releaseTurn.promise;
+				return { turnId: "turn-1", content: "obsolete" };
+			},
+		});
+		const old = harness.adapter.emit(message("conversation-1", "old"));
+		await turnStarted.promise;
+		const reset = harness.adapter.emit(message("conversation-1", "/new"));
+		const queued = harness.adapter.emit(message("conversation-1", "queued"));
+		let stopped = false;
+		const stop = harness.stop().then(() => {
+			stopped = true;
+		});
+		await Promise.resolve();
+
+		expect(stopped).toBe(false);
+		expect(harness.createCalls).toEqual([{}]);
+		releaseTurn.resolve(undefined);
+		await Promise.all([old, reset, queued, stop]);
+		expect(harness.createCalls).toEqual([{}]);
+		expect(harness.adapter.sent).toHaveLength(0);
+	});
+
+	test("stop during fresh creation publishes no binding or confirmation", async () => {
+		const creationStarted = deferred<void>();
+		const releaseCreation = deferred<void>();
+		const harness = await createHarness({
+			beforeCreateSession: () => {
+				creationStarted.resolve(undefined);
+				return releaseCreation.promise;
+			},
+		});
+		const reset = harness.adapter.emit(message("conversation-1", "/new"));
+		await creationStarted.promise;
+		const stop = harness.stop();
+
+		releaseCreation.resolve(undefined);
+		await Promise.all([reset, stop]);
+		expect(
+			await harness.bindings.get(source("conversation-1")),
+		).toBeUndefined();
+		expect(harness.adapter.sent).toHaveLength(0);
+	});
+
+	test("stop during binding persistence keeps the committed binding without confirmation", async () => {
+		const harness = await createHarness();
+		const bindStarted = deferred<void>();
+		const releaseBind = deferred<void>();
+		const bind = harness.bindings.bind.bind(harness.bindings);
+		harness.bindings.bind = async (candidate, sessionId) => {
+			bindStarted.resolve(undefined);
+			await releaseBind.promise;
+			return bind(candidate, sessionId);
+		};
+		const reset = harness.adapter.emit(message("conversation-1", "/new"));
+		await bindStarted.promise;
+		const stop = harness.stop();
+
+		releaseBind.resolve(undefined);
+		await Promise.all([reset, stop]);
+		expect(
+			(await harness.bindings.get(source("conversation-1")))?.sessionId,
+		).toBe("session-1");
+		expect(harness.adapter.sent).toHaveLength(0);
 	});
 
 	test("an exit evicts only its conversation session", async () => {

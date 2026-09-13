@@ -8,7 +8,10 @@ import { ChannelDelivery } from "./channel-delivery";
 
 function adapter(
 	name: string,
-	send: (output: ChannelOutput) => Promise<void> = async () => {},
+	send: (
+		output: ChannelOutput,
+		signal?: AbortSignal,
+	) => Promise<void> = async () => {},
 ): ChannelAdapter {
 	return {
 		name,
@@ -41,6 +44,20 @@ describe("ChannelDelivery", () => {
 		await delivery.send(output);
 
 		expect(sent).toEqual([output]);
+	});
+
+	test("forwards operation cancellation to the adapter", async () => {
+		let received: AbortSignal | undefined;
+		const delivery = new ChannelDelivery([
+			adapter("telegram", async (_candidate, signal) => {
+				received = signal;
+			}),
+		]);
+		const controller = new AbortController();
+
+		await delivery.send(output, controller.signal);
+
+		expect(received).toBe(controller.signal);
 	});
 
 	test("rejects output for an unknown channel", async () => {

@@ -1,4 +1,5 @@
 import type {
+	ChannelControlIntent,
 	SlashCommandContext,
 	SlashCommandResult,
 } from "../commands/command";
@@ -30,6 +31,7 @@ export type SessionInteractionMessage =
 export interface SessionInteractionResult {
 	readonly messages: readonly SessionInteractionMessage[];
 	readonly exitRequested: boolean;
+	readonly channelControl?: ChannelControlIntent;
 }
 
 export type InteractorSession = Pick<
@@ -57,14 +59,50 @@ export class SessionInteractor {
 	) {}
 
 	handle(input: SessionInteractionInput): Promise<SessionInteractionResult> {
-		const run = this.tail.then(() => this.handleNow(input, 0));
+		let started = false;
+		const run = this.tail.then(() => {
+			started = true;
+			return input.signal?.aborted
+				? { messages: [], exitRequested: false }
+				: this.handleNow(input, 0);
+		});
 
 		this.tail = run.then(
 			() => undefined,
 			() => undefined,
 		);
 
-		return run;
+		const signal = input.signal;
+		if (signal === undefined) {
+			return run;
+		}
+
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			const finish = (complete: () => void) => {
+				if (settled) {
+					return;
+				}
+
+				settled = true;
+				signal.removeEventListener("abort", onAbort);
+				complete();
+			};
+			const onAbort = () => {
+				if (!started) {
+					finish(() => resolve({ messages: [], exitRequested: false }));
+				}
+			};
+
+			signal.addEventListener("abort", onAbort, { once: true });
+			if (signal.aborted) {
+				onAbort();
+			}
+			void run.then(
+				(result) => finish(() => resolve(result)),
+				(error) => finish(() => reject(error)),
+			);
+		});
 	}
 
 	private async handleNow(
@@ -155,6 +193,13 @@ export class SessionInteractor {
 									},
 								],
 					exitRequested: true,
+				};
+
+			case "channel-control":
+				return {
+					messages: [],
+					exitRequested: false,
+					channelControl: result.intent,
 				};
 		}
 	}

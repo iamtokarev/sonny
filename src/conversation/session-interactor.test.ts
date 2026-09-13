@@ -348,6 +348,48 @@ describe("SessionInteractor", () => {
 		]);
 	});
 
+	test("does not dispatch an aborted input after waiting in its own queue", async () => {
+		const firstStarted = createDeferred<void>();
+		const releaseFirst = createDeferred<void>();
+		let commandRuns = 0;
+		const registry = new CommandRegistry();
+		registry.register({
+			name: "inspect",
+			description: "Inspect state.",
+			execute: () => {
+				commandRuns += 1;
+				return { type: "message", content: "inspected" };
+			},
+		});
+		const interactor = new SessionInteractor(
+			createSession({
+				runTurn: async () => {
+					firstStarted.resolve(undefined);
+					await releaseFirst.promise;
+					return { turnId: "turn-1", content: "done" };
+				},
+			}),
+			registry,
+		);
+		const first = interactor.handle({ content: "first", source: cliSource });
+		await firstStarted.promise;
+		const controller = new AbortController();
+		const queued = interactor.handle({
+			content: "/inspect",
+			source: cliSource,
+			signal: controller.signal,
+		});
+
+		controller.abort();
+		await expect(queued).resolves.toEqual({
+			messages: [],
+			exitRequested: false,
+		});
+		expect(commandRuns).toBe(0);
+		releaseFirst.resolve(undefined);
+		await first;
+	});
+
 	test("continues the queue after a failed input", async () => {
 		const interactor = new SessionInteractor(
 			createSession({

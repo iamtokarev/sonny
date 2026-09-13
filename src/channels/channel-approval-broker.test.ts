@@ -5,6 +5,7 @@ import {
 	ChannelApprovalBroker,
 	type DeliverChannelOutput,
 } from "./channel-approval-broker";
+import { createChannelSessionKey } from "./channel-session-binding-store";
 
 function deferred<T>() {
 	let resolve: ((value: T) => void) | undefined;
@@ -87,7 +88,7 @@ function trackedAbortSignal(): {
 	readonly addCount: () => number;
 	readonly removeCount: () => number;
 } {
-	let listener: (() => void) | undefined;
+	const listeners = new Set<() => void>();
 	let additions = 0;
 	let removals = 0;
 	const signal = {
@@ -95,20 +96,24 @@ function trackedAbortSignal(): {
 		addEventListener(type: string, candidate: () => void) {
 			if (type === "abort") {
 				additions += 1;
-				listener = candidate;
+				listeners.add(candidate);
 			}
 		},
-		removeEventListener(type: string) {
+		removeEventListener(type: string, candidate: () => void) {
 			if (type === "abort") {
 				removals += 1;
-				listener = undefined;
+				listeners.delete(candidate);
 			}
 		},
 	} as unknown as AbortSignal;
 
 	return {
 		signal,
-		abort: () => listener?.(),
+		abort: () => {
+			for (const listener of [...listeners]) {
+				listener();
+			}
+		},
 		addCount: () => additions,
 		removeCount: () => removals,
 	};
@@ -292,15 +297,16 @@ describe("ChannelApprovalBroker", () => {
 			}),
 		);
 
-		expect(tracked.addCount()).toBe(1);
+		expect(tracked.addCount()).toBe(2);
 		tracked.abort();
 		await expect(decision).resolves.toEqual({
 			approved: false,
 			reason: "Tool approval was cancelled because the turn ended.",
 		});
-		expect(tracked.removeCount()).toBe(1);
+		await broker.drain();
+		expect(tracked.removeCount()).toBe(2);
 		tracked.abort();
-		expect(tracked.removeCount()).toBe(1);
+		expect(tracked.removeCount()).toBe(2);
 	});
 
 	test("denies delivery failure and cleans up the pending request", async () => {
@@ -364,5 +370,62 @@ describe("ChannelApprovalBroker", () => {
 		delivery.resolve(undefined);
 		await drain;
 		expect(drained).toBe(true);
+	});
+
+	test("cancels and drains detached deliveries for only one conversation", async () => {
+		const deliveries = [deferred<void>(), deferred<void>()];
+		const outputs: ChannelOutput[] = [];
+		const signals: AbortSignal[] = [];
+		const broker = new ChannelApprovalBroker((output, signal) => {
+			outputs.push(output);
+			if (!signal) {
+				throw new Error("Expected an operation signal.");
+			}
+			signals.push(signal);
+			return deliveries[outputs.length - 1]?.promise ?? Promise.resolve();
+		});
+		const first = broker.request(request());
+		const otherSource = {
+			...channelSource,
+			conversationId: "conversation-2",
+		};
+		const second = broker.request(
+			request({
+				toolCallId: "call-2",
+				turn: {
+					sessionId: "session-2",
+					turnId: "turn-2",
+					source: otherSource,
+				},
+			}),
+		);
+		broker.resolve({
+			type: "action",
+			source: actionSource(),
+			value: actionValue(outputs[0] as ChannelOutput, "Approve"),
+		});
+		broker.resolve({
+			type: "action",
+			source: actionSource({ conversationId: "conversation-2" }),
+			value: actionValue(outputs[1] as ChannelOutput, "Approve"),
+		});
+		await Promise.all([first, second]);
+
+		const firstKey = createChannelSessionKey(actionSource());
+		broker.cancelConversation(firstKey, "New session started.");
+		expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+		let drained = false;
+		const drain = broker.drainConversation(firstKey).then(() => {
+			drained = true;
+		});
+		await Promise.resolve();
+		expect(drained).toBe(false);
+
+		deliveries[0]?.resolve(undefined);
+		await drain;
+		expect(drained).toBe(true);
+		broker.cancelAll("test cleanup");
+		deliveries[1]?.resolve(undefined);
+		await broker.drain();
 	});
 });

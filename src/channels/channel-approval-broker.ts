@@ -9,7 +9,10 @@ import type { ChannelEvent, ChannelOutput } from "./channel";
 import { toChannelTarget } from "./channel";
 import { createChannelSessionKey } from "./channel-session-binding-store";
 
-export type DeliverChannelOutput = (output: ChannelOutput) => Promise<void>;
+export type DeliverChannelOutput = (
+	output: ChannelOutput,
+	signal?: AbortSignal,
+) => Promise<void>;
 
 type ChannelRuntimeSource = Extract<RuntimeSource, { kind: "channel" }>;
 type ApprovalAction = Extract<ChannelEvent, { type: "action" }>;
@@ -22,6 +25,11 @@ interface PendingApproval {
 	readonly timeout: ReturnType<typeof setTimeout>;
 	readonly signal?: AbortSignal;
 	readonly abortListener?: () => void;
+}
+
+interface PendingDelivery {
+	readonly sourceKey: string;
+	readonly abort: AbortController;
 }
 
 const approvalActionPattern =
@@ -65,7 +73,7 @@ function approvalOutput(
 
 export class ChannelApprovalBroker {
 	private readonly pending = new Map<string, PendingApproval>();
-	private readonly deliveries = new Set<Promise<void>>();
+	private readonly deliveries = new Map<Promise<void>, PendingDelivery>();
 
 	constructor(
 		private readonly deliver: DeliverChannelOutput,
@@ -86,6 +94,7 @@ export class ChannelApprovalBroker {
 		const id = randomUUID();
 
 		return new Promise((resolve) => {
+			const sourceKey = createChannelSessionKey(source);
 			const timeout = setTimeout(() => {
 				this.settle(id, { approved: false, reason: timeoutReason });
 			}, this.timeoutMs);
@@ -99,7 +108,7 @@ export class ChannelApprovalBroker {
 				: undefined;
 
 			this.pending.set(id, {
-				sourceKey: createChannelSessionKey(source),
+				sourceKey,
 				userId: source.userId,
 				resolve,
 				timeout,
@@ -114,10 +123,28 @@ export class ChannelApprovalBroker {
 			}
 
 			let delivery: Promise<void>;
+			const deliveryAbort = new AbortController();
+			const abortDeliveryFromTurn = request.turn.signal
+				? () => deliveryAbort.abort()
+				: undefined;
+			if (abortDeliveryFromTurn) {
+				request.turn.signal?.addEventListener("abort", abortDeliveryFromTurn, {
+					once: true,
+				});
+			}
 
 			try {
-				delivery = this.deliver(approvalOutput(request, source, id));
+				delivery = this.deliver(
+					approvalOutput(request, source, id),
+					deliveryAbort.signal,
+				);
 			} catch {
+				if (abortDeliveryFromTurn) {
+					request.turn.signal?.removeEventListener(
+						"abort",
+						abortDeliveryFromTurn,
+					);
+				}
 				this.settle(id, { approved: false, reason: deliveryFailureReason });
 				return;
 			}
@@ -125,8 +152,19 @@ export class ChannelApprovalBroker {
 			const tracked = delivery.catch(() => {
 				this.settle(id, { approved: false, reason: deliveryFailureReason });
 			});
-			this.deliveries.add(tracked);
-			void tracked.finally(() => this.deliveries.delete(tracked));
+			this.deliveries.set(tracked, {
+				sourceKey,
+				abort: deliveryAbort,
+			});
+			void tracked.finally(() => {
+				this.deliveries.delete(tracked);
+				if (abortDeliveryFromTurn) {
+					request.turn.signal?.removeEventListener(
+						"abort",
+						abortDeliveryFromTurn,
+					);
+				}
+			});
 		});
 	}
 
@@ -168,11 +206,43 @@ export class ChannelApprovalBroker {
 		for (const id of [...this.pending.keys()]) {
 			this.settle(id, { approved: false, reason });
 		}
+
+		for (const delivery of this.deliveries.values()) {
+			delivery.abort.abort();
+		}
+	}
+
+	cancelConversation(sourceKey: string, reason: string): void {
+		for (const [id, pending] of this.pending) {
+			if (pending.sourceKey === sourceKey) {
+				this.settle(id, { approved: false, reason });
+			}
+		}
+
+		for (const delivery of this.deliveries.values()) {
+			if (delivery.sourceKey === sourceKey) {
+				delivery.abort.abort();
+			}
+		}
 	}
 
 	async drain(): Promise<void> {
 		while (this.deliveries.size > 0) {
-			await Promise.allSettled([...this.deliveries]);
+			await Promise.allSettled(this.deliveries.keys());
+		}
+	}
+
+	async drainConversation(sourceKey: string): Promise<void> {
+		while (true) {
+			const deliveries = [...this.deliveries]
+				.filter(([, delivery]) => delivery.sourceKey === sourceKey)
+				.map(([promise]) => promise);
+
+			if (deliveries.length === 0) {
+				return;
+			}
+
+			await Promise.allSettled(deliveries);
 		}
 	}
 

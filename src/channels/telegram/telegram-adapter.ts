@@ -233,7 +233,7 @@ export class TelegramAdapter implements ChannelAdapter {
 		}
 	}
 
-	async send(output: ChannelOutput): Promise<void> {
+	async send(output: ChannelOutput, signal?: AbortSignal): Promise<void> {
 		if (output.target.channel !== this.name) {
 			throw new Error("Telegram adapter cannot send to another channel.");
 		}
@@ -242,7 +242,7 @@ export class TelegramAdapter implements ChannelAdapter {
 
 		try {
 			for (const [index, chunk] of chunks.entries()) {
-				if (this.lifecycleSignal?.aborted) {
+				if (this.lifecycleSignal?.aborted || signal?.aborted) {
 					return;
 				}
 				const isFirst = index === 0;

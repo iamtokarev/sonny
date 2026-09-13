@@ -21,7 +21,10 @@ export interface SlashCommand {
 		args: string,
 		context: SlashCommandContext,
 	): SlashCommandResult | Promise<SlashCommandResult>;
+	channelControl?(args: string): ChannelControlIntent | undefined;
 }
+
+export type ChannelControlIntent = "new-session";
 
 export type SlashCommandResult =
 	| {
@@ -40,6 +43,10 @@ export type SlashCommandResult =
 	| {
 			type: "exit";
 			content?: string;
+	  }
+	| {
+			type: "channel-control";
+			intent: ChannelControlIntent;
 	  };
 
 export type SlashCommandDispatchResult =

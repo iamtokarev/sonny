@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CommandRegistry } from "../commands/command-registry";
+import type { Config, ConfigSnapshot } from "../config";
+import { InMemoryRuntimeEventBus } from "../events";
+import { HistoryStore } from "../history";
 import type { AgentTurnInput, CreateAgentSessionResult } from "../runtime";
+import { createAgentSession, type RuntimeConfigStore } from "../runtime";
 import type { ChannelSource } from "./channel";
 import { ChannelSessionBindingStore } from "./channel-session-binding-store";
 import {
@@ -307,5 +311,193 @@ describe("ChannelSessionDirectory", () => {
 		expect(resumed).not.toBe(initial);
 		expect(resumed.sessionId).toBe(initial.sessionId);
 		expect(calls).toEqual([{}, { resumeSessionId: "session-1" }]);
+	});
+
+	test("replaces only the invoking binding while preserving a shared old runtime", async () => {
+		const bindings = await createBindingStore();
+		const firstSource = source("conversation-1");
+		const secondSource = source("conversation-2");
+		await bindings.bind(firstSource, "shared-session");
+		await bindings.bind(secondSource, "shared-session");
+		let fresh = 0;
+		const directory = new ChannelSessionDirectory(
+			bindings,
+			async (options) => {
+				if (options.resumeSessionId !== undefined) {
+					return sessionResult(options.resumeSessionId);
+				}
+
+				fresh += 1;
+				return sessionResult(`replacement-${fresh}`);
+			},
+			new CommandRegistry(),
+		);
+		const first = await directory.getOrCreate(firstSource);
+		const second = await directory.getOrCreate(secondSource);
+
+		const replacement = await directory.replace(firstSource);
+
+		expect(replacement.sessionId).toBe("replacement-1");
+		expect(await directory.getOrCreate(firstSource)).toBe(replacement);
+		expect(await directory.getOrCreate(secondSource)).toBe(second);
+		expect(second).toBe(first);
+		expect((await bindings.get(firstSource))?.sessionId).toBe("replacement-1");
+		expect((await bindings.get(secondSource))?.sessionId).toBe(
+			"shared-session",
+		);
+	});
+
+	test("keeps the old cache and binding usable when fresh creation fails", async () => {
+		const bindings = await createBindingStore();
+		const input = source("conversation-1");
+		let calls = 0;
+		const directory = new ChannelSessionDirectory(
+			bindings,
+			async (options) => {
+				calls += 1;
+				if (calls === 2) {
+					throw new Error("fresh creation failed");
+				}
+				return sessionResult(options.resumeSessionId ?? "session-1");
+			},
+			new CommandRegistry(),
+		);
+		const old = await directory.getOrCreate(input);
+
+		await expect(directory.replace(input)).rejects.toThrow(
+			"fresh creation failed",
+		);
+		expect(await directory.getOrCreate(input)).toBe(old);
+		expect((await bindings.get(input))?.sessionId).toBe("session-1");
+	});
+
+	test("publishes no replacement when cancellation arrives during creation", async () => {
+		const bindings = await createBindingStore();
+		const input = source("conversation-1");
+		const creationStarted = createDeferred<void>();
+		const releaseCreation = createDeferred<void>();
+		let calls = 0;
+		const directory = new ChannelSessionDirectory(
+			bindings,
+			async () => {
+				calls += 1;
+				if (calls === 2) {
+					creationStarted.resolve();
+					await releaseCreation.promise;
+					return sessionResult("replacement");
+				}
+				return sessionResult("session-1");
+			},
+			new CommandRegistry(),
+		);
+		const old = await directory.getOrCreate(input);
+		const controller = new AbortController();
+		const replacement = directory.replace(input, controller.signal);
+		await creationStarted.promise;
+
+		controller.abort();
+		releaseCreation.resolve();
+		await expect(replacement).rejects.toMatchObject({ name: "AbortError" });
+		expect(await directory.getOrCreate(input)).toBe(old);
+		expect((await bindings.get(input))?.sessionId).toBe("session-1");
+	});
+
+	test("preserves real old history and restarts on the empty replacement with current defaults", async () => {
+		const workspace = await mkdtemp(join(tmpdir(), "sonny-channel-real-"));
+		const agentPath = join(workspace, "agents", "sonny");
+		await mkdir(agentPath, { recursive: true });
+		await writeFile(
+			join(agentPath, "AGENT.md"),
+			"---\nname: Sonny\ndescription: Test assistant\n---\nCurrent instructions.\n",
+		);
+		const config: Config = {
+			workspace,
+			defaultAgent: "sonny",
+			agentsPath: "agents",
+			contextCompaction: {
+				contextWindowTokens: 200_000,
+				thresholdRatio: 0.75,
+				maxToolResultChars: 10_000,
+				protectedHeadMessages: 4,
+				protectedTailMessages: 6,
+				summaryMaxTokens: 4_000,
+			},
+			llm: {
+				model: "gpt-current-default",
+				apiKey: "test-key",
+				temperature: 0.7,
+				maxTokens: 2_048,
+			},
+			channels: { telegram: { enabled: false, allowedUserIds: [] } },
+		};
+		const snapshot: ConfigSnapshot = {
+			revision: 1,
+			loadedAt: new Date(),
+			config,
+		};
+		const configStore: RuntimeConfigStore = {
+			current: snapshot,
+			refresh: async () => ({ status: "unchanged", snapshot }),
+		};
+		const history = new HistoryStore(join(workspace, ".history"));
+		const old = history.createSession({
+			id: "old-history",
+			agentId: "legacy-agent",
+			systemPrompt: "Legacy instructions.",
+		});
+		history.appendMessage(old.id, { role: "user", content: "Keep me" });
+		const bindings = new ChannelSessionBindingStore(
+			join(workspace, ".history", "channels", "bindings.json"),
+		);
+		const input = source("conversation-1");
+		await bindings.bind(input, old.id);
+		const created: CreateAgentSessionResult[] = [];
+		const createReal: CreateChannelSession = async (options) => {
+			const result = await createAgentSession({
+				configStore,
+				events: new InMemoryRuntimeEventBus(),
+				approveToolCall: async () => ({ approved: true }),
+				...options,
+			});
+			created.push(result);
+			return result;
+		};
+		const directory = new ChannelSessionDirectory(
+			bindings,
+			createReal,
+			new CommandRegistry(),
+		);
+		await directory.getOrCreate(input);
+
+		const replacement = await directory.replace(input);
+
+		expect(replacement.sessionId).not.toBe(old.id);
+		expect(history.readMessages(old.id)).toEqual([
+			{ role: "user", content: "Keep me" },
+		]);
+		expect(history.readMessages(replacement.sessionId)).toEqual([]);
+		expect(history.getSession(replacement.sessionId)).toMatchObject({
+			agentId: "sonny",
+			messageCount: 0,
+			systemPrompt: expect.stringContaining("Current instructions."),
+		});
+		expect(created.at(-1)).toMatchObject({
+			mode: "new",
+			model: "gpt-current-default",
+			restoredMessages: [],
+		});
+		expect((await bindings.get(input))?.sessionId).toBe(replacement.sessionId);
+
+		const restarted = new ChannelSessionDirectory(
+			bindings,
+			createReal,
+			new CommandRegistry(),
+		);
+		const resumed = await restarted.getOrCreate(input);
+		expect(resumed.sessionId).toBe(replacement.sessionId);
+		expect(created.at(-1)).toMatchObject({
+			mode: "resume",
+			restoredMessages: [],
+		});
 	});
 });

@@ -1,3 +1,4 @@
+import type { CommandRegistry } from "../commands/command-registry";
 import type { SessionInteractionResult } from "../conversation";
 import type { RuntimeSource } from "../events";
 import { createLogger } from "../utils/logger";
@@ -13,6 +14,10 @@ import type {
 
 const logger = createLogger("channels.gateway");
 const failureMessage = "Sorry, I could not handle that message.";
+const resetFailureMessage =
+	"Sorry, I could not start a new session. The previous session remains available.";
+const resetCancellationReason =
+	"Tool approval was cancelled because a new session started.";
 
 export type ChannelAccessCheck = (source: ChannelSource) => boolean;
 
@@ -21,13 +26,25 @@ export interface ChannelGatewayOptions {
 	readonly delivery: ChannelDelivery;
 	readonly sessions: ChannelSessionDirectory;
 	readonly approvals: ChannelApprovalBroker;
+	readonly commands: CommandRegistry;
 	readonly isAllowed: ChannelAccessCheck;
+}
+
+interface ConversationGeneration {
+	readonly abort: AbortController;
+	active: number;
+	discarded: number;
+}
+
+interface ConversationState {
+	tail: Promise<void>;
+	generation: ConversationGeneration;
 }
 
 export class ChannelGateway {
 	private readonly handlers = new Set<Promise<void>>();
 	private accepting = false;
-	private readonly conversationTails = new Map<string, Promise<void>>();
+	private readonly conversations = new Map<string, ConversationState>();
 
 	constructor(private readonly options: ChannelGatewayOptions) {}
 
@@ -134,7 +151,33 @@ export class ChannelGateway {
 			return;
 		}
 
+		const control = this.options.commands.matchChannelControl(event.text);
+
+		if (control?.intent === "new-session") {
+			await this.enqueueReset(event, signal);
+			return;
+		}
+
 		await this.enqueueMessage(event, signal);
+	}
+
+	private getConversation(key: string): ConversationState {
+		const existing = this.conversations.get(key);
+
+		if (existing !== undefined) {
+			return existing;
+		}
+
+		const created: ConversationState = {
+			tail: Promise.resolve(),
+			generation: {
+				abort: new AbortController(),
+				active: 0,
+				discarded: 0,
+			},
+		};
+		this.conversations.set(key, created);
+		return created;
 	}
 
 	private enqueueMessage(
@@ -142,18 +185,132 @@ export class ChannelGateway {
 		signal: AbortSignal,
 	): Promise<void> {
 		const key = createChannelSessionKey(event.source);
-		const previous = this.conversationTails.get(key) ?? Promise.resolve();
-		const operation = previous
+		const conversation = this.getConversation(key);
+		const generation = conversation.generation;
+		const operationSignal = AbortSignal.any([signal, generation.abort.signal]);
+		const operation = conversation.tail
 			.catch(() => undefined)
-			.then(() => this.handleMessage(event, signal));
+			.then(async () => {
+				if (operationSignal.aborted || conversation.generation !== generation) {
+					generation.discarded += 1;
+					return;
+				}
 
-		this.conversationTails.set(key, operation);
+				generation.active += 1;
+				try {
+					await this.handleMessage(event, operationSignal);
+				} finally {
+					generation.active -= 1;
+				}
+			});
 
+		return this.ownConversationOperation(key, conversation, operation);
+	}
+
+	private enqueueReset(
+		event: Extract<ChannelEvent, { type: "message" }>,
+		signal: AbortSignal,
+	): Promise<void> {
+		const key = createChannelSessionKey(event.source);
+		const conversation = this.getConversation(key);
+		const retired = conversation.generation;
+		const interrupted = retired.active > 0;
+		retired.abort.abort();
+		this.options.approvals.cancelConversation(key, resetCancellationReason);
+		conversation.generation = {
+			abort: new AbortController(),
+			active: 0,
+			discarded: 0,
+		};
+
+		const operation = conversation.tail
+			.catch(() => undefined)
+			.then(() => this.handleReset(event, signal, key, retired, interrupted));
+		return this.ownConversationOperation(key, conversation, operation);
+	}
+
+	private ownConversationOperation(
+		key: string,
+		conversation: ConversationState,
+		operation: Promise<void>,
+	): Promise<void> {
+		conversation.tail = operation;
 		return operation.finally(() => {
-			if (this.conversationTails.get(key) === operation) {
-				this.conversationTails.delete(key);
+			if (
+				this.conversations.get(key) === conversation &&
+				conversation.tail === operation
+			) {
+				this.conversations.delete(key);
 			}
 		});
+	}
+
+	private async handleReset(
+		event: Extract<ChannelEvent, { type: "message" }>,
+		signal: AbortSignal,
+		key: string,
+		retired: ConversationGeneration,
+		interrupted: boolean,
+	): Promise<void> {
+		const target = toChannelTarget(event.source);
+		let committed = false;
+
+		try {
+			await this.options.approvals.drainConversation(key);
+			if (signal.aborted) {
+				return;
+			}
+
+			await this.options.sessions.replace(event.source, signal);
+			committed = true;
+			if (signal.aborted) {
+				return;
+			}
+
+			const details: string[] = [];
+			if (interrupted) {
+				details.push("Interrupted active work.");
+			}
+			if (retired.discarded > 0) {
+				details.push(
+					`Discarded ${retired.discarded} queued ${retired.discarded === 1 ? "message" : "messages"}.`,
+				);
+			}
+			const confirmation = [
+				"Started a new session. Previous history is preserved.",
+				...details,
+			].join(" ");
+
+			await this.options.delivery.send(
+				{
+					target,
+					text: confirmation,
+					replyToMessageId: event.source.messageId,
+				},
+				signal,
+			);
+		} catch (error) {
+			if (signal.aborted) {
+				return;
+			}
+
+			logger.error("channel.session.reset_failed", {
+				channel: event.source.channel,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			if (committed) {
+				throw error;
+			}
+
+			await this.options.delivery.send(
+				{
+					target,
+					text: resetFailureMessage,
+					replyToMessageId: event.source.messageId,
+				},
+				signal,
+			);
+		}
 	}
 
 	private async handleMessage(
@@ -194,11 +351,14 @@ export class ChannelGateway {
 				channel: event.source.channel,
 				error: error instanceof Error ? error.message : String(error),
 			});
-			await this.options.delivery.send({
-				target,
-				text: failureMessage,
-				replyToMessageId: event.source.messageId,
-			});
+			await this.options.delivery.send(
+				{
+					target,
+					text: failureMessage,
+					replyToMessageId: event.source.messageId,
+				},
+				signal,
+			);
 			return;
 		}
 
@@ -210,11 +370,14 @@ export class ChannelGateway {
 			if (signal.aborted) {
 				return;
 			}
-			await this.options.delivery.send({
-				target,
-				text: message.content,
-				replyToMessageId: event.source.messageId,
-			});
+			await this.options.delivery.send(
+				{
+					target,
+					text: message.content,
+					replyToMessageId: event.source.messageId,
+				},
+				signal,
+			);
 		}
 	}
 }

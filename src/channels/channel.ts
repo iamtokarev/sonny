@@ -59,7 +59,7 @@ export interface ChannelAdapter {
 		signal: AbortSignal,
 		onFailure?: ChannelAdapterFailureHandler,
 	): Promise<void>;
-	send(output: ChannelOutput): Promise<void>;
+	send(output: ChannelOutput, signal?: AbortSignal): Promise<void>;
 }
 
 export function toChannelTarget(source: ChannelTargetSource): ChannelTarget {

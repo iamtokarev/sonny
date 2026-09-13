@@ -483,6 +483,32 @@ describe("TelegramAdapter delivery", () => {
 		expect(bot.sends).toHaveLength(1);
 	});
 
+	test("finishes an issued chunk but starts no later chunk after operation cancellation", async () => {
+		const firstSend = deferred<void>();
+		const bot = new FakeBot();
+		bot.api.sendMessage = async (chatId, text, options) => {
+			bot.sends.push({ chatId, text, options });
+			await firstSend.promise;
+			return {};
+		};
+		const { adapter } = createAdapter({ bot });
+		const controller = new AbortController();
+		const send = adapter.send(
+			{
+				target: { channel: "telegram", conversationId: "42" },
+				text: "a".repeat(4_001),
+			},
+			controller.signal,
+		);
+		await Promise.resolve();
+		expect(bot.sends).toHaveLength(1);
+
+		controller.abort();
+		firstSend.resolve(undefined);
+		await send;
+		expect(bot.sends).toHaveLength(1);
+	});
+
 	test("rejects wrong-channel output without sending", async () => {
 		const { adapter, bot } = createAdapter();
 

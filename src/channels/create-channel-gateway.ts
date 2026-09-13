@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { createDefaultCommandRegistry } from "../commands/create-command-registry";
+import { createChannelCommandRegistry } from "../commands/create-command-registry";
 import type { ResolvedConfig } from "../config";
 import type { RuntimeEventBus } from "../events";
 import {
@@ -84,13 +84,13 @@ export async function createChannelGateway(
 	}
 
 	const delivery = new ChannelDelivery(adapters);
-	const approvals = new ChannelApprovalBroker((output) =>
-		delivery.send(output),
+	const approvals = new ChannelApprovalBroker((output, signal) =>
+		delivery.send(output, signal),
 	);
 	const bindings = new ChannelSessionBindingStore(
 		join(config.workspace, ".history", "channels", "bindings.json"),
 	);
-	const commands = createDefaultCommandRegistry();
+	const commands = createChannelCommandRegistry();
 	const sessions = new ChannelSessionDirectory(
 		bindings,
 		({ resumeSessionId }) =>
@@ -108,6 +108,7 @@ export async function createChannelGateway(
 		delivery,
 		sessions,
 		approvals,
+		commands,
 		isAllowed: createChannelAccessCheck(config),
 	});
 }
