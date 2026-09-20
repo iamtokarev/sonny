@@ -3,7 +3,11 @@ import { parseConfig, type ResolvedConfig } from "../config";
 import { InMemoryRuntimeEventBus } from "../events";
 import type { RuntimeConfigStore } from "../runtime";
 import type { LogFields, Logger } from "../utils/logger";
-import { type GatewaySignalSource, runGatewayCommand } from "./gateway-command";
+import {
+	type GatewaySignalSource,
+	type GatewayTerminal,
+	runGatewayCommand,
+} from "./gateway-command";
 
 type GatewaySignal = "SIGINT" | "SIGTERM";
 
@@ -78,6 +82,35 @@ function createConfigStore(): RuntimeConfigStore {
 }
 
 describe("runGatewayCommand", () => {
+	test("acknowledges startup in the terminal before constructing the gateway", async () => {
+		const order: string[] = [];
+		const terminal: GatewayTerminal = {
+			writeLine: (message) => order.push(`terminal:${message}`),
+		};
+
+		await runGatewayCommand({
+			configStore: createConfigStore(),
+			signals: new FakeSignals(),
+			terminal,
+			createGateway: async () => {
+				order.push("construct");
+				return {
+					run: async () => {
+						order.push("run");
+					},
+				};
+			},
+		});
+
+		expect(order).toEqual([
+			"terminal:Starting Sonny gateway (telegram; long-polling). Press Ctrl-C to stop.",
+			"construct",
+			"run",
+		]);
+		expect(JSON.stringify(order)).not.toContain("sensitive-telegram-token");
+		expect(JSON.stringify(order)).not.toContain("sensitive-telegram-user");
+	});
+
 	test("logs stopped and removes listeners only after gateway drain", async () => {
 		const signals = new FakeSignals();
 		const drain = deferred<void>();
@@ -93,6 +126,7 @@ describe("runGatewayCommand", () => {
 			configStore: createConfigStore(),
 			signals,
 			logger,
+			terminal: { writeLine: () => {} },
 			createGateway: async () => ({
 				run: async (signal) => {
 					started.resolve(undefined);
@@ -132,6 +166,7 @@ describe("runGatewayCommand", () => {
 			configStore,
 			events,
 			signals,
+			terminal: { writeLine: () => {} },
 			createGateway: async (options) => {
 				constructionOptions = options;
 				return {
@@ -170,6 +205,7 @@ describe("runGatewayCommand", () => {
 			runGatewayCommand({
 				configStore: createConfigStore(),
 				signals,
+				terminal: { writeLine: () => {} },
 				createGateway: async () => ({
 					run: async () => {
 						throw failure;
@@ -195,6 +231,7 @@ describe("runGatewayCommand", () => {
 			signals: new FakeSignals(),
 			createGateway: async () => ({ run: async () => {} }),
 			logger,
+			terminal: { writeLine: () => {} },
 		});
 
 		expect(records).toEqual([

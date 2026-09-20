@@ -15,6 +15,10 @@ export interface GatewaySignalSource {
 	off(signal: GatewaySignal, listener: () => void): void;
 }
 
+export interface GatewayTerminal {
+	writeLine(message: string): void;
+}
+
 interface RunnableGateway {
 	run(signal: AbortSignal): Promise<void>;
 }
@@ -29,6 +33,7 @@ export interface RunGatewayCommandOptions {
 	readonly createGateway?: CreateGateway;
 	readonly signals?: GatewaySignalSource;
 	readonly logger?: Logger;
+	readonly terminal?: GatewayTerminal;
 }
 
 const processSignals: GatewaySignalSource = {
@@ -40,10 +45,21 @@ const processSignals: GatewaySignalSource = {
 	},
 };
 
+const processTerminal: GatewayTerminal = {
+	writeLine: (message) => console.log(message),
+};
+
 export async function runGatewayCommand(
 	options: RunGatewayCommandOptions,
 ): Promise<void> {
 	const startupConfig = options.configStore.current.config;
+	const enabledChannels = startupConfig.channels.telegram.enabled
+		? ["telegram"]
+		: [];
+	const terminal = options.terminal ?? processTerminal;
+	terminal.writeLine(
+		`Starting Sonny gateway (${enabledChannels.join(", ") || "no channels"}; long-polling). Press Ctrl-C to stop.`,
+	);
 	const events = options.events ?? new InMemoryRuntimeEventBus();
 	const gateway = await (options.createGateway ?? createChannelGateway)({
 		configStore: options.configStore,
@@ -58,9 +74,7 @@ export async function runGatewayCommand(
 	signals.once("SIGTERM", stop);
 
 	commandLogger.info("channel.gateway.started", {
-		enabledChannels: startupConfig.channels.telegram.enabled
-			? ["telegram"]
-			: [],
+		enabledChannels,
 		mode: "long-polling",
 		telegramAllowlistCount:
 			startupConfig.channels.telegram.allowedUserIds.length,
@@ -73,9 +87,7 @@ export async function runGatewayCommand(
 		signals.off("SIGINT", stop);
 		signals.off("SIGTERM", stop);
 		commandLogger.info("channel.gateway.stopped", {
-			enabledChannels: startupConfig.channels.telegram.enabled
-				? ["telegram"]
-				: [],
+			enabledChannels,
 		});
 	}
 }
