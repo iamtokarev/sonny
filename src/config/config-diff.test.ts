@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { diffConfigSections } from "./config-diff";
-import type { Config } from "./schemas";
+import { type Config, DEFAULT_TOOL_APPROVAL_CONFIG } from "./schemas";
 
 function createConfig(overrides: Partial<Config> = {}): Config {
 	return {
@@ -21,6 +21,7 @@ function createConfig(overrides: Partial<Config> = {}): Config {
 			protectedTailMessages: 6,
 			summaryMaxTokens: 4000,
 		},
+		toolApproval: DEFAULT_TOOL_APPROVAL_CONFIG,
 		channels: {
 			telegram: {
 				enabled: false,

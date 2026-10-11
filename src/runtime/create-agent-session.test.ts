@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Config, ConfigSnapshot } from "../config";
+import {
+	type Config,
+	type ConfigSnapshot,
+	DEFAULT_TOOL_APPROVAL_CONFIG,
+} from "../config";
 import { InMemoryRuntimeEventBus, type RuntimeEvent } from "../events";
 import { HistoryStore } from "../history";
 import { AgentRuntime } from "./agent-runtime";
@@ -43,6 +47,7 @@ You are Sonny.
 				temperature: 0.7,
 				maxTokens: 2048,
 			},
+			toolApproval: DEFAULT_TOOL_APPROVAL_CONFIG,
 			channels: {
 				telegram: {
 					enabled: false,

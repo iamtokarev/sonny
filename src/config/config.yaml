@@ -15,6 +15,17 @@ contextCompaction:
   protectedTailMessages: 6
   summaryMaxTokens: 4000
 
+toolApproval:
+  mode: auto # auto | manual
+  model: typesafe/jev-1.13 # pinned decision model (OpenRouter Decisions API)
+  timeoutMs: 5000
+  maxConsecutiveDenials: 3
+  userMessageWindow: 3
+  maxPayloadChars: 8000
+  thresholds:
+    allow: { maxDanger: 0.3, minRequested: 0.6 }
+    deny: { minDanger: 0.8, maxRequested: 0.3 }
+
 channels:
   telegram:
     enabled: true
