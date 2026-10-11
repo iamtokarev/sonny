@@ -10,9 +10,16 @@ export type BaseToolHookContext = {
 
 export type PreToolContext = BaseToolHookContext;
 
+/**
+ * `origin: "auto"` marks a decision made automatically on the user's behalf
+ * rather than by a fixed policy. An automatic deny hands the model the
+ * caller-supplied, recoverable `message` verbatim instead of the `BLOCKED:`
+ * wrapper that policy and human denials use.
+ */
 export type PreToolDecision =
-	| { action: "allow" }
-	| { action: "deny"; reason: string }
+	| { action: "allow"; origin?: "auto" }
+	| { action: "deny"; reason: string; origin?: "policy" }
+	| { action: "deny"; origin: "auto"; message: string }
 	| { action: "ask"; reason?: string }
 	| { action: "updateInput"; parameters: unknown; reason?: string };
 

@@ -1,4 +1,4 @@
-import type { ToolCall } from "../domain";
+import type { ToolApprovalOutcome, ToolCall } from "../domain";
 import {
 	createEventMetadata,
 	publishRuntimeEvent,
@@ -127,6 +127,7 @@ export class ToolExecutor {
 		let parameters = call.parameters;
 		let permissionRequired = false;
 		let permissionReason: string | undefined;
+		let approval: ToolApprovalOutcome | undefined;
 
 		const createContext = (): BaseToolHookContext => ({
 			toolCallId: call.id,
@@ -140,6 +141,9 @@ export class ToolExecutor {
 			turnContext.signal?.throwIfAborted();
 
 			if (decision.action === "allow") {
+				if (decision.origin === "auto") {
+					approval = "auto-approved";
+				}
 				continue;
 			}
 
@@ -159,9 +163,21 @@ export class ToolExecutor {
 				continue;
 			}
 
+			if (decision.origin === "auto") {
+				return await this.denyToolCall({
+					context: createContext(),
+					reason: decision.message,
+					message: decision.message,
+					approval: "auto-denied",
+					durationMs: Date.now() - startedAt,
+					turnContext,
+				});
+			}
+
 			return await this.denyToolCall({
 				context: createContext(),
 				reason: `Blocked by policy: ${decision.reason}`,
+				approval: "policy-blocked",
 				durationMs: Date.now() - startedAt,
 				turnContext,
 			});
@@ -175,6 +191,7 @@ export class ToolExecutor {
 					context: createContext(),
 					reason:
 						"Permission was required, but no permission hook was configured.",
+					approval: "policy-blocked",
 					durationMs: Date.now() - startedAt,
 					turnContext,
 				});
@@ -205,12 +222,14 @@ export class ToolExecutor {
 						decision.reason === undefined
 							? "User denied this tool call."
 							: `User denied this tool call: ${decision.reason}`,
+					approval: "user-denied",
 					durationMs: Date.now() - startedAt,
 					turnContext,
 				});
 			}
 
 			turnContext.signal?.throwIfAborted();
+			approval = "user-approved";
 
 			logger.info("tool.permission.approved", {
 				toolName: call.name,
@@ -259,6 +278,7 @@ export class ToolExecutor {
 				createContext(),
 				result,
 				durationMs,
+				approval,
 			);
 
 			return transformedResult;
@@ -284,6 +304,7 @@ export class ToolExecutor {
 				createContext(),
 				result,
 				durationMs,
+				approval,
 			);
 
 			return transformedResult;
@@ -293,15 +314,20 @@ export class ToolExecutor {
 	private async denyToolCall({
 		context,
 		reason,
+		message,
+		approval,
 		durationMs,
 		turnContext,
 	}: {
 		context: BaseToolHookContext;
 		reason?: string;
+		/** Model-visible text to use verbatim instead of the `BLOCKED:` wrapper. */
+		message?: string;
+		approval?: ToolApprovalOutcome;
 		durationMs: number;
 		turnContext: TurnContext;
 	}): Promise<ToolResult> {
-		const error = createBlockedToolMessage(reason);
+		const error = message ?? createBlockedToolMessage(reason);
 		const result = {
 			ok: false as const,
 			error,
@@ -337,6 +363,7 @@ export class ToolExecutor {
 			context,
 			transformedResult,
 			durationMs,
+			approval,
 		);
 
 		return transformedResult;
@@ -347,6 +374,7 @@ export class ToolExecutor {
 		context: BaseToolHookContext,
 		result: ToolResult,
 		durationMs: number,
+		approval: ToolApprovalOutcome | undefined,
 	): Promise<ToolResult> {
 		await this.runPostToolHooks(context, result, durationMs);
 		await this.runFailureHooks(context, result, durationMs);
@@ -361,6 +389,7 @@ export class ToolExecutor {
 			context,
 			transformedResult,
 			durationMs,
+			approval,
 		);
 
 		return transformedResult;
@@ -371,6 +400,7 @@ export class ToolExecutor {
 		context: ToolEventContext,
 		result: ToolResult,
 		durationMs: number,
+		approval?: ToolApprovalOutcome,
 	): void {
 		publishRuntimeEvent(turnContext.events, {
 			...createEventMetadata(turnContext),
@@ -381,6 +411,7 @@ export class ToolExecutor {
 			status: getToolCompletionStatus(result),
 			content: result.ok ? result.content : result.error,
 			durationMs,
+			...(approval === undefined ? {} : { approval }),
 		});
 	}
 

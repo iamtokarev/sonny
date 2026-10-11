@@ -6,6 +6,17 @@ export type ToolCompletionStatus =
 	| "failed"
 	| "not_found";
 
+/**
+ * Who let a tool call run or refused it. Absent when no approval step applied
+ * (no hook asked, decided automatically or denied).
+ */
+export type ToolApprovalOutcome =
+	| "auto-approved"
+	| "auto-denied"
+	| "user-approved"
+	| "user-denied"
+	| "policy-blocked";
+
 export type ToolCall = {
 	id: string;
 	name: string;
