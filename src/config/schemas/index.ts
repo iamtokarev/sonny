@@ -7,6 +7,7 @@ import {
 	DEFAULT_CONTEXT_COMPACTION_CONFIG,
 } from "./context-compaction.schema";
 import { LLMConfigSchema } from "./llm.schema";
+import { ToolApprovalConfigSchema } from "./tool-approval.schema";
 
 export const ConfigSchema = z.object({
 	workspace: z.string().default(join(process.cwd(), "workspace")),
@@ -22,6 +23,7 @@ export const ConfigSchema = z.object({
 			allowedUserIds: [],
 		},
 	}),
+	toolApproval: ToolApprovalConfigSchema.prefault({}),
 
 	// web search
 	tavilyApiKey: z.string().optional(),
@@ -32,3 +34,4 @@ export type Config = z.infer<typeof ConfigSchema>;
 export * from "./channels.schema";
 export * from "./context-compaction.schema";
 export * from "./llm.schema";
+export * from "./tool-approval.schema";
