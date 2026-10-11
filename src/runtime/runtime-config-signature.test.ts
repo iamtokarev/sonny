@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Config } from "../config";
+import { type Config, DEFAULT_TOOL_APPROVAL_CONFIG } from "../config";
 import { createRuntimeConfigSignature } from "./runtime-config-signature";
 
 function createConfig(overrides: Partial<Config> = {}): Config {
@@ -21,6 +21,7 @@ function createConfig(overrides: Partial<Config> = {}): Config {
 			protectedTailMessages: 6,
 			summaryMaxTokens: 4000,
 		},
+		toolApproval: DEFAULT_TOOL_APPROVAL_CONFIG,
 		channels: {
 			telegram: {
 				enabled: false,
