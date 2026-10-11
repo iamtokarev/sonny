@@ -329,15 +329,14 @@ export function createToolRow(event: ToolCompletedEvent): ToolRow {
 		event.content,
 		event.approval,
 	);
-	// Failures already earn a second line; the label marks calls that went well.
-	const succeeded = summary.status === "ok" || summary.status === "truncated";
 
+	// Marks every call that ran on the automatic check's say-so, failed or not.
 	return {
 		toolName: event.toolName,
 		preview: describeToolCall(event.toolName, event.parameters),
 		duration: formatDuration(event.durationMs),
 		...summary,
-		...(event.approval === "auto-approved" && succeeded
+		...(event.approval === "auto-approved"
 			? { approval: "auto-approved" as const }
 			: {}),
 	};

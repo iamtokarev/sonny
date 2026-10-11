@@ -144,7 +144,7 @@ export class ToolExecutor {
 		for (const hook of this.hooks.preTool ?? []) {
 			const decision = await hook({
 				...createContext(),
-				approval: approvalContext,
+				approvalContext,
 				signal: turnContext.signal,
 			});
 			turnContext.signal?.throwIfAborted();
@@ -172,10 +172,10 @@ export class ToolExecutor {
 				continue;
 			}
 
-			if (decision.origin === "auto") {
+			if ("origin" in decision) {
 				return await this.denyToolCall({
 					context: createContext(),
-					reason: decision.message,
+					reason: "Denied by the automatic approval check.",
 					message: decision.message,
 					approval: "auto-denied",
 					durationMs: Date.now() - startedAt,

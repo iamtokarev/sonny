@@ -4,10 +4,10 @@ import {
 	requestedByUserQuestionId,
 } from "./approval-questions";
 
-export type ApprovalOutcome = "allow" | "deny" | "ask";
+export type ApprovalVerdict = "allow" | "deny" | "ask";
 
 export interface CombinedApproval {
-	readonly outcome: ApprovalOutcome;
+	readonly verdict: ApprovalVerdict;
 	/**
 	 * Danger questions at or above `deny.minDanger`, plus `requested_by_user`
 	 * when at or below `deny.maxRequested`, in question order.
@@ -16,7 +16,7 @@ export interface CombinedApproval {
 }
 
 /**
- * Turns the decision model's probabilities into an outcome. Danger is the
+ * Turns the decision model's probabilities into a verdict. Danger is the
  * highest danger-role probability and requested is `requested_by_user`;
  * informational answers never count.
  */
@@ -62,15 +62,15 @@ export function combineApprovalAnswers(
 		danger >= thresholds.deny.minDanger &&
 		requested <= thresholds.deny.maxRequested
 	) {
-		return { outcome: "deny", failedChecks };
+		return { verdict: "deny", failedChecks };
 	}
 
 	if (
 		danger <= thresholds.allow.maxDanger &&
 		requested >= thresholds.allow.minRequested
 	) {
-		return { outcome: "allow", failedChecks };
+		return { verdict: "allow", failedChecks };
 	}
 
-	return { outcome: "ask", failedChecks };
+	return { verdict: "ask", failedChecks };
 }

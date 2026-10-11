@@ -44,7 +44,7 @@ export const ToolApprovalConfigSchema = z.object({
 	maxConsecutiveDenials: z
 		.number()
 		.int()
-		.nonnegative()
+		.positive()
 		.default(DEFAULT_TOOL_APPROVAL_CONFIG.maxConsecutiveDenials),
 	userMessageWindow: z
 		.number()

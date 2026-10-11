@@ -94,6 +94,24 @@ describe("ToolRowView", () => {
 		).toBe("  ⏺ bash       bun run test  4.2s  42 pass  auto-approved");
 	});
 
+	test("keeps the auto-approved label on a failed row", () => {
+		const output = draw(
+			<ToolRowView
+				row={toolRow({
+					status: "error",
+					result: "exit 1",
+					detail: "2 failing",
+					approval: "auto-approved",
+				})}
+			/>,
+		);
+
+		expect(output.split("\n")).toEqual([
+			"  ⏺ bash       bun run test  4.2s  exit 1  auto-approved",
+			"    └ 2 failing",
+		]);
+	});
+
 	test("adds one line of why when a call fails", () => {
 		const output = draw(
 			<ToolRowView

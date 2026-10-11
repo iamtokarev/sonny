@@ -314,10 +314,10 @@ describe("AgentSession", () => {
 		}> = [];
 		const toolExecutor = new ToolExecutor(tools, {
 			preTool: [
-				({ approval }) => {
+				({ approvalContext }) => {
 					seen.push({
-						userMessages: approval?.recentUserMessages(3) ?? [],
-						previousCall: approval?.previousCall,
+						userMessages: approvalContext?.recentUserMessages(3) ?? [],
+						previousCall: approvalContext?.previousCall,
 					});
 					return { action: "allow" };
 				},
@@ -374,6 +374,60 @@ describe("AgentSession", () => {
 		]);
 		expect(JSON.stringify(seen)).not.toContain("tool output");
 		expect(JSON.stringify(seen)).not.toContain("Sure, I will look");
+	});
+
+	test("leaves the status off a previous call whose stored result predates statuses", async () => {
+		state = new SessionState({
+			initialMessages: [
+				{ role: "user", content: "read notes.md" },
+				{
+					role: "assistant",
+					content: "",
+					toolCalls: [
+						{
+							id: "call_legacy",
+							name: "read_test",
+							parameters: { path: "notes.md" },
+						},
+					],
+				},
+				{ role: "tool", toolCallId: "call_legacy", content: "old output" },
+			],
+		});
+		const tools = new ToolRegistry();
+		tools.register(testTool);
+		const seen: unknown[] = [];
+		const toolExecutor = new ToolExecutor(tools, {
+			preTool: [
+				({ approvalContext }) => {
+					seen.push(approvalContext?.previousCall);
+					return { action: "allow" };
+				},
+			],
+		});
+		const llm = new FakeLLM([
+			{
+				content: "",
+				stopReason: "tool_calls",
+				toolCalls: [{ id: "call_new", name: "read_test", parameters: {} }],
+			},
+			"Final answer",
+		]);
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			toolExecutor,
+		);
+
+		await session.chat("again", turnContext);
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toStrictEqual({
+			name: "read_test",
+			parameters: { path: "notes.md" },
+		});
 	});
 
 	test("stops at the next checkpoint once the turn is aborted", async () => {

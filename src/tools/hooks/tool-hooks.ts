@@ -13,7 +13,8 @@ export type BaseToolHookContext = {
 export type PreviousToolCall = {
 	readonly name: string;
 	readonly parameters: unknown;
-	readonly status: ToolCompletionStatus | null;
+	/** Absent for results stored before tool messages carried a status. */
+	readonly status?: ToolCompletionStatus;
 };
 
 /**
@@ -29,7 +30,7 @@ export interface ApprovalContext {
 
 export type PreToolContext = BaseToolHookContext & {
 	/** Absent when the caller has no conversation to offer. */
-	approval?: ApprovalContext;
+	approvalContext?: ApprovalContext;
 	/** The turn's cancellation signal. */
 	signal?: AbortSignal;
 };
@@ -42,7 +43,7 @@ export type PreToolContext = BaseToolHookContext & {
  */
 export type PreToolDecision =
 	| { action: "allow"; origin?: "auto" }
-	| { action: "deny"; reason: string; origin?: "policy" }
+	| { action: "deny"; reason: string }
 	| { action: "deny"; origin: "auto"; message: string }
 	| { action: "ask"; reason?: string }
 	| { action: "updateInput"; parameters: unknown; reason?: string };

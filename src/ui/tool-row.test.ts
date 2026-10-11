@@ -80,18 +80,30 @@ describe("createToolRow", () => {
 		});
 	});
 
-	test("adds no approval label when no automatic approval applied", () => {
-		expect(createToolRow(completed()).approval).toBeUndefined();
-		expect(
-			createToolRow(completed({ approval: "user-approved" })).approval,
-		).toBeUndefined();
+	test("labels an auto-approved call that ran and failed", () => {
 		expect(
 			createToolRow(
 				completed({
 					approval: "auto-approved",
 					content: JSON.stringify({ exitCode: 1, stdout: "", stderr: "x" }),
 				}),
-			).approval,
+			),
+		).toMatchObject({ status: "error", approval: "auto-approved" });
+		expect(
+			createToolRow(
+				completed({
+					status: "failed",
+					approval: "auto-approved",
+					content: "Tool execution failed: boom",
+				}),
+			),
+		).toMatchObject({ status: "error", approval: "auto-approved" });
+	});
+
+	test("adds no approval label when no automatic approval applied", () => {
+		expect(createToolRow(completed()).approval).toBeUndefined();
+		expect(
+			createToolRow(completed({ approval: "user-approved" })).approval,
 		).toBeUndefined();
 	});
 

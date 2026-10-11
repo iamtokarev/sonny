@@ -1,15 +1,63 @@
-function collectStringLengths(value: unknown, lengths: number[]): void {
+/**
+ * The only parameters that may be shortened before the decision model sees
+ * them: bulk content whose head and tail say enough. Everything else — a
+ * command, a working directory, a path, a URL, a query — is sent verbatim,
+ * because a cut there could hide exactly the part that makes a call
+ * dangerous.
+ */
+const contentFieldsByTool: ReadonlyMap<string, readonly string[]> = new Map([
+	["writeFile", ["content"]],
+	["editFile", ["oldText", "newText"]],
+]);
+
+function countStringChars(value: unknown): number {
 	if (typeof value === "string") {
-		lengths.push(value.length);
-	} else if (Array.isArray(value)) {
-		for (const item of value) {
-			collectStringLengths(item, lengths);
-		}
-	} else if (typeof value === "object" && value !== null) {
-		for (const item of Object.values(value)) {
-			collectStringLengths(item, lengths);
-		}
+		return value.length;
 	}
+
+	if (typeof value === "object" && value !== null) {
+		let total = 0;
+
+		for (const item of Object.values(value)) {
+			total += countStringChars(item);
+		}
+
+		return total;
+	}
+
+	return 0;
+}
+
+function omissionMarker(omitted: number): string {
+	return `[${omitted} characters omitted]`;
+}
+
+/**
+ * Keeps the head and tail of `text` around an omission marker so the result,
+ * marker included, has at most `limit` characters. `null` when even the
+ * marker alone would not fit.
+ */
+function capString(text: string, limit: number): string | null {
+	if (text.length <= limit) {
+		return text;
+	}
+
+	// The widest marker this cut can need: omitting fewer characters than
+	// the whole text never takes more digits.
+	const kept = limit - omissionMarker(text.length).length;
+
+	if (kept < 0) {
+		return null;
+	}
+
+	const headLength = Math.ceil(kept / 2);
+	const tailLength = kept - headLength;
+
+	return (
+		text.slice(0, headLength) +
+		omissionMarker(text.length - kept) +
+		text.slice(text.length - tailLength)
+	);
 }
 
 /**
@@ -34,54 +82,62 @@ function perStringLimit(lengths: number[], maxChars: number): number | null {
 	return null;
 }
 
-function capString(text: string, limit: number): string {
-	if (text.length <= limit) {
-		return text;
-	}
-
-	const headLength = Math.ceil(limit / 2);
-	const tailLength = limit - headLength;
-	const omitted = text.length - limit;
-
-	return (
-		text.slice(0, headLength) +
-		`[${omitted} characters omitted]` +
-		text.slice(text.length - tailLength)
-	);
-}
-
-function mapStrings(value: unknown, map: (text: string) => string): unknown {
-	if (typeof value === "string") {
-		return map(value);
-	}
-
-	if (Array.isArray(value)) {
-		return value.map((item) => mapStrings(item, map));
-	}
-
-	if (typeof value === "object" && value !== null) {
-		return Object.fromEntries(
-			Object.entries(value).map(([key, item]) => [key, mapStrings(item, map)]),
-		);
-	}
-
-	return value;
-}
+export type CappedParameters = {
+	readonly parameters: unknown;
+	/** String characters in `parameters`, omission markers included. */
+	readonly chars: number;
+};
 
 /**
- * Shortens the string values in `value` so that together they keep at most
- * `maxChars` characters. Each shortened string keeps its head and tail around
- * an explicit "[N characters omitted]" marker, so the judge still sees how a
- * file write or command starts and ends.
+ * Fits one call's parameters into `maxChars` string characters. Only the
+ * tool's content fields are shortened, each keeping its head and tail around
+ * an explicit "[N characters omitted]" marker that counts against the budget.
+ * `null` when the parameters cannot fit without cutting anything else.
  */
-export function capStringPayload(value: unknown, maxChars: number): unknown {
-	const lengths: number[] = [];
-	collectStringLengths(value, lengths);
-	const limit = perStringLimit(lengths, maxChars);
+export function capToolParameters(
+	toolName: string,
+	parameters: unknown,
+	maxChars: number,
+): CappedParameters | null {
+	const total = countStringChars(parameters);
 
-	if (limit === null) {
-		return value;
+	if (total <= maxChars) {
+		return { parameters, chars: total };
 	}
 
-	return mapStrings(value, (text) => capString(text, limit));
+	if (typeof parameters !== "object" || parameters === null) {
+		return null;
+	}
+
+	const record = parameters as Record<string, unknown>;
+	const contentFields = (contentFieldsByTool.get(toolName) ?? []).filter(
+		(field) => typeof record[field] === "string",
+	);
+	const contents = contentFields.map((field) => record[field] as string);
+	const contentChars = contents.reduce((sum, text) => sum + text.length, 0);
+	const verbatimChars = total - contentChars;
+	const limit = perStringLimit(
+		contents.map((text) => text.length),
+		maxChars - verbatimChars,
+	);
+
+	if (limit === null || limit < 0) {
+		return null;
+	}
+
+	const capped: Record<string, unknown> = { ...record };
+	let chars = verbatimChars;
+
+	for (const field of contentFields) {
+		const text = capString(record[field] as string, limit);
+
+		if (text === null) {
+			return null;
+		}
+
+		capped[field] = text;
+		chars += text.length;
+	}
+
+	return { parameters: capped, chars };
 }
