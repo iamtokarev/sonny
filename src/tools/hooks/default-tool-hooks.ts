@@ -1,4 +1,7 @@
+import type { ToolApprovalConfig } from "../../config";
 import { createLogger } from "../../utils/logger";
+import { createAutoApprovalHooks } from "../approval/auto-approval-hook";
+import type { DecisionModel } from "../approval/decision-model";
 import type { ToolResult } from "../tool";
 import { filePolicyPreToolHook } from "./file-policy-hooks";
 import type {
@@ -83,15 +86,31 @@ export const reduceLargeToolOutput: TransformToolResultHook = ({
 	};
 };
 
-export function createDefaultToolHooks(permission: PermissionHook): ToolHooks {
+export type DefaultToolHooksOptions = {
+	permission: PermissionHook;
+	toolApproval: ToolApprovalConfig;
+	/** Consulted only in auto mode. */
+	decisionModel: DecisionModel;
+};
+
+/**
+ * The file and URL policies always hard-deny first. Auto mode then lets the
+ * decision model judge the call; manual mode asks the user every time.
+ */
+export function createDefaultToolHooks({
+	permission,
+	toolApproval,
+	decisionModel,
+}: DefaultToolHooksOptions): ToolHooks {
+	const approval =
+		toolApproval.mode === "auto"
+			? createAutoApprovalHooks({ decisionModel, config: toolApproval })
+			: { preTool: askBeforeEveryTool, postTool: undefined };
+
 	return {
-		preTool: [
-			filePolicyPreToolHook,
-			webUrlPolicyPreToolHook,
-			askBeforeEveryTool,
-		],
+		preTool: [filePolicyPreToolHook, webUrlPolicyPreToolHook, approval.preTool],
 		permission,
-		postTool: [],
+		postTool: approval.postTool === undefined ? [] : [approval.postTool],
 		toolFailure: [logToolFailure],
 		permissionDenied: [logPermissionDenied],
 		transformToolResult: [enrichFailureForModel, reduceLargeToolOutput],

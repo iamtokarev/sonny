@@ -6,6 +6,7 @@ import {
 } from "../events";
 import { createLogger } from "../utils/logger";
 import type {
+	ApprovalContext,
 	BaseToolHookContext,
 	PermissionHook,
 	ToolHooks,
@@ -63,7 +64,11 @@ export class ToolExecutor {
 		private hooks: ToolHooks,
 	) {}
 
-	async execute(call: ToolCall, turnContext: TurnContext): Promise<ToolResult> {
+	async execute(
+		call: ToolCall,
+		turnContext: TurnContext,
+		approvalContext?: ApprovalContext,
+	): Promise<ToolResult> {
 		let tool: Tool;
 		const startedAt = Date.now();
 
@@ -137,7 +142,11 @@ export class ToolExecutor {
 		});
 
 		for (const hook of this.hooks.preTool ?? []) {
-			const decision = await hook(createContext());
+			const decision = await hook({
+				...createContext(),
+				approval: approvalContext,
+				signal: turnContext.signal,
+			});
 			turnContext.signal?.throwIfAborted();
 
 			if (decision.action === "allow") {

@@ -13,6 +13,7 @@ import { getToolCompletionStatus, type ToolResult } from "../tools/tool";
 import type { ToolExecutor } from "../tools/tool-executor";
 import type { ToolRegistry } from "../tools/tool-registry";
 import { createLogger } from "../utils/logger";
+import { createApprovalContext } from "./approval-context";
 import type { SessionState } from "./session-state";
 import { buildSystemPrompt } from "./system-prompt-builder";
 
@@ -174,7 +175,11 @@ export class AgentSession {
 
 					let toolResult: ToolResult;
 					try {
-						toolResult = await this.toolExecutor.execute(toolCall, turnContext);
+						toolResult = await this.toolExecutor.execute(
+							toolCall,
+							turnContext,
+							createApprovalContext(this.state.getMessages()),
+						);
 					} catch (error) {
 						if (turnContext.signal?.aborted) {
 							this.recordCancelledToolCalls(response.toolCalls.slice(index));

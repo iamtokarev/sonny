@@ -70,6 +70,28 @@ describe("createRuntimeConfigSignature", () => {
 		).not.toBe(signature);
 	});
 
+	test("changes for tool approval mode and tuning", () => {
+		const config = createConfig();
+		const signature = createRuntimeConfigSignature(config);
+		const toolApprovalChanges = [
+			{ ...config.toolApproval, mode: "manual" as const },
+			{ ...config.toolApproval, maxConsecutiveDenials: 5 },
+			{
+				...config.toolApproval,
+				thresholds: {
+					...config.toolApproval.thresholds,
+					deny: { minDanger: 0.9, maxRequested: 0.2 },
+				},
+			},
+		];
+
+		for (const toolApproval of toolApprovalChanges) {
+			expect(
+				createRuntimeConfigSignature(createConfig({ toolApproval })),
+			).not.toBe(signature);
+		}
+	});
+
 	test("ignores future-session defaults and never exposes secrets", () => {
 		const config = createConfig();
 		const signature = createRuntimeConfigSignature(config);

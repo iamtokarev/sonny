@@ -15,6 +15,7 @@ import { LLMProvider } from "../llm";
 import { buildSkillsPrompt } from "../skills/build-skills-prompt";
 import { loadSkills } from "../skills/load-skills";
 import type { Skill } from "../skills/skill";
+import { OpenRouterDecisionModel } from "../tools/approval/decision-model";
 import { createDefaultToolRegistry } from "../tools/create-tool-registry";
 import { createDefaultToolHooks } from "../tools/hooks/default-tool-hooks";
 import type { PermissionHook } from "../tools/hooks/tool-hooks";
@@ -139,7 +140,15 @@ export async function createAgentSession(
 			webSearchProvider: webProvider,
 			webReadProvider: webProvider,
 		});
-		const hooks = createDefaultToolHooks(options.approveToolCall);
+		const hooks = createDefaultToolHooks({
+			permission: options.approveToolCall,
+			toolApproval: config.toolApproval,
+			decisionModel: new OpenRouterDecisionModel({
+				model: config.toolApproval.model,
+				apiKey: config.llm.apiKey,
+				timeoutMs: config.toolApproval.timeoutMs,
+			}),
+		});
 		const toolExecutor = new ToolExecutor(tools, hooks);
 		const contextManager = new ContextManager({
 			tokenCounter: new RoughTokenCounter(),

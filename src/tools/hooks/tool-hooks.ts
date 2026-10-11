@@ -1,3 +1,4 @@
+import type { ToolCompletionStatus } from "../../domain";
 import type { RuntimeSource } from "../../events";
 import type { ToolResult } from "../tool";
 
@@ -8,7 +9,30 @@ export type BaseToolHookContext = {
 	parameters: unknown;
 };
 
-export type PreToolContext = BaseToolHookContext;
+/** The tool call that ran before the pending one. Never carries its output. */
+export type PreviousToolCall = {
+	readonly name: string;
+	readonly parameters: unknown;
+	readonly status: ToolCompletionStatus | null;
+};
+
+/**
+ * A read-only view of the conversation for approval decisions: what the user
+ * asked for and the step before. Assistant prose and tool output are never
+ * part of it, so neither can argue a call past the judge.
+ */
+export interface ApprovalContext {
+	/** The last `limit` user messages, oldest first, text only. */
+	recentUserMessages(limit: number): readonly string[];
+	readonly previousCall: PreviousToolCall | null;
+}
+
+export type PreToolContext = BaseToolHookContext & {
+	/** Absent when the caller has no conversation to offer. */
+	approval?: ApprovalContext;
+	/** The turn's cancellation signal. */
+	signal?: AbortSignal;
+};
 
 /**
  * `origin: "auto"` marks a decision made automatically on the user's behalf

@@ -11,6 +11,7 @@ export function createRuntimeConfigSignature(config: ResolvedConfig): string {
 			reasoningEffort: config.llm.reasoningEffort ?? null,
 		},
 		contextCompaction: config.contextCompaction,
+		toolApproval: config.toolApproval,
 		web: {
 			tavilyApiKey: config.tavilyApiKey ?? null,
 		},
