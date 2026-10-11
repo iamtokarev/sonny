@@ -205,18 +205,21 @@ describe("TelegramAdapter update normalization", () => {
 		privateTextContext({ from: undefined }),
 		privateTextContext({ message: undefined }),
 		privateTextContext({ message: { message_id: 9, text: "   " } }),
-	] as const)("ignores unsupported or malformed text updates", async (context) => {
-		const events: ChannelEvent[] = [];
-		const running = await startAdapter(async (event) => {
-			events.push(event);
-		});
+	] as const)(
+		"ignores unsupported or malformed text updates",
+		async (context) => {
+			const events: ChannelEvent[] = [];
+			const running = await startAdapter(async (event) => {
+				events.push(event);
+			});
 
-		await running.bot.emit("message:text", context);
+			await running.bot.emit("message:text", context);
 
-		expect(events).toHaveLength(0);
-		running.controller.abort();
-		await running.run;
-	});
+			expect(events).toHaveLength(0);
+			running.controller.abort();
+			await running.run;
+		},
+	);
 
 	test("registers only the supported text and callback update filters", async () => {
 		const running = await startAdapter();
@@ -422,24 +425,20 @@ describe("TelegramAdapter delivery", () => {
 		});
 	});
 
-	test.each([
-		undefined,
-		"",
-		"not-a-number",
-		"0",
-		"-1",
-		"1.5",
-	])("omits invalid reply metadata", async (replyToMessageId) => {
-		const { adapter, bot } = createAdapter();
+	test.each([undefined, "", "not-a-number", "0", "-1", "1.5"])(
+		"omits invalid reply metadata",
+		async (replyToMessageId) => {
+			const { adapter, bot } = createAdapter();
 
-		await adapter.send({
-			target: { channel: "telegram", conversationId: "42" },
-			text: "Hello",
-			replyToMessageId,
-		});
+			await adapter.send({
+				target: { channel: "telegram", conversationId: "42" },
+				text: "Hello",
+				replyToMessageId,
+			});
 
-		expect(bot.sends[0]?.options).not.toHaveProperty("reply_parameters");
-	});
+			expect(bot.sends[0]?.options).not.toHaveProperty("reply_parameters");
+		},
+	);
 
 	test("delivers oversized Unicode text in ordered bounded chunks", async () => {
 		const { adapter, bot } = createAdapter();

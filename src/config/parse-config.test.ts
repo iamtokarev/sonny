@@ -186,4 +186,64 @@ describe("parseConfig", () => {
 			summaryMaxTokens: 500,
 		});
 	});
+
+	test("defaults to auto tool approval when the block is missing", () => {
+		const config = parseConfig(
+			{ llm: { model: "gpt-4.1" }, defaultAgent: "sonny" },
+			{ llmApiKey: "test-key" },
+		);
+
+		expect(config.toolApproval).toEqual({
+			mode: "auto",
+			model: "typesafe/jev-1.13",
+			timeoutMs: 5000,
+			maxConsecutiveDenials: 3,
+			userMessageWindow: 3,
+			maxPayloadChars: 8000,
+			thresholds: {
+				allow: { maxDanger: 0.3, minRequested: 0.6 },
+				deny: { minDanger: 0.8, maxRequested: 0.3 },
+			},
+		});
+	});
+
+	test("fills tool approval defaults around explicit values", () => {
+		const config = parseConfig(
+			{
+				llm: { model: "gpt-4.1" },
+				defaultAgent: "sonny",
+				toolApproval: {
+					mode: "manual",
+					model: "~typesafe/jev-latest",
+					thresholds: { deny: { minDanger: 0.9 } },
+				},
+			},
+			{ llmApiKey: "test-key" },
+		);
+
+		expect(config.toolApproval.mode).toBe("manual");
+		expect(config.toolApproval.model).toBe("~typesafe/jev-latest");
+		expect(config.toolApproval.timeoutMs).toBe(5000);
+		expect(config.toolApproval.thresholds).toEqual({
+			allow: { maxDanger: 0.3, minRequested: 0.6 },
+			deny: { minDanger: 0.9, maxRequested: 0.3 },
+		});
+	});
+
+	test.each([
+		["an unknown mode", { mode: "yolo" }],
+		["a threshold above 1", { thresholds: { allow: { maxDanger: 1.5 } } }],
+		["a negative threshold", { thresholds: { deny: { maxRequested: -0.1 } } }],
+		["a non-positive timeout", { timeoutMs: 0 }],
+		["a negative denial limit", { maxConsecutiveDenials: -1 }],
+		["a zero denial limit", { maxConsecutiveDenials: 0 }],
+		["a fractional denial limit", { maxConsecutiveDenials: 1.5 }],
+	])("rejects tool approval config with %s", (_label, toolApproval) => {
+		expect(() =>
+			parseConfig(
+				{ llm: { model: "gpt-4.1" }, defaultAgent: "sonny", toolApproval },
+				{ llmApiKey: "test-key" },
+			),
+		).toThrow("Invalid configuration");
+	});
 });

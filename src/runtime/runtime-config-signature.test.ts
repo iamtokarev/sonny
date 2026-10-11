@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Config } from "../config";
+import { type Config, DEFAULT_TOOL_APPROVAL_CONFIG } from "../config";
 import { createRuntimeConfigSignature } from "./runtime-config-signature";
 
 function createConfig(overrides: Partial<Config> = {}): Config {
@@ -21,6 +21,7 @@ function createConfig(overrides: Partial<Config> = {}): Config {
 			protectedTailMessages: 6,
 			summaryMaxTokens: 4000,
 		},
+		toolApproval: DEFAULT_TOOL_APPROVAL_CONFIG,
 		channels: {
 			telegram: {
 				enabled: false,
@@ -67,6 +68,28 @@ describe("createRuntimeConfigSignature", () => {
 		expect(
 			createRuntimeConfigSignature(createConfig({ tavilyApiKey: "web-key" })),
 		).not.toBe(signature);
+	});
+
+	test("changes for tool approval mode and tuning", () => {
+		const config = createConfig();
+		const signature = createRuntimeConfigSignature(config);
+		const toolApprovalChanges = [
+			{ ...config.toolApproval, mode: "manual" as const },
+			{ ...config.toolApproval, maxConsecutiveDenials: 5 },
+			{
+				...config.toolApproval,
+				thresholds: {
+					...config.toolApproval.thresholds,
+					deny: { minDanger: 0.9, maxRequested: 0.2 },
+				},
+			},
+		];
+
+		for (const toolApproval of toolApprovalChanges) {
+			expect(
+				createRuntimeConfigSignature(createConfig({ toolApproval })),
+			).not.toBe(signature);
+		}
 	});
 
 	test("ignores future-session defaults and never exposes secrets", () => {

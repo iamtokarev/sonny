@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { CONTEXT_SUMMARY_HEADER } from "../context";
 import type { ChatMessage, ToolCall } from "../domain";
 import type {
 	RuntimeEventPublisher,
@@ -248,6 +249,7 @@ describe("AgentSession", () => {
 		expect(execute).toHaveBeenCalledWith(
 			expect.objectContaining({ id: "call_test" }),
 			turnContext,
+			expect.objectContaining({ previousCall: null }),
 		);
 		expect(llm.calls).toHaveLength(2);
 		expect(llm.toolSchemas[0]).toEqual(tools.getSchemas());
@@ -272,6 +274,160 @@ describe("AgentSession", () => {
 				status: "succeeded",
 			},
 		]);
+	});
+
+	test("gives pre-tool hooks the user's recent messages and the previous call without output", async () => {
+		state = new SessionState({
+			initialMessages: [
+				{ role: "user", content: "oldest request" },
+				{ role: "assistant", content: "Sure, I will look." },
+				{
+					role: "user",
+					content: `${CONTEXT_SUMMARY_HEADER}\nEarlier turns were summarised.`,
+				},
+				{ role: "user", content: "read notes.md" },
+				{
+					role: "assistant",
+					content: "",
+					toolCalls: [
+						{
+							id: "call_earlier",
+							name: "read_test",
+							parameters: { path: "notes.md" },
+						},
+					],
+				},
+				{
+					role: "tool",
+					toolCallId: "call_earlier",
+					content: "secret tool output",
+					status: "succeeded",
+				},
+				{ role: "assistant", content: "Done reading." },
+			],
+		});
+		const tools = new ToolRegistry();
+		tools.register(testTool);
+		const seen: Array<{
+			userMessages: readonly string[];
+			previousCall: unknown;
+		}> = [];
+		const toolExecutor = new ToolExecutor(tools, {
+			preTool: [
+				({ approvalContext }) => {
+					seen.push({
+						userMessages: approvalContext?.recentUserMessages(3) ?? [],
+						previousCall: approvalContext?.previousCall,
+					});
+					return { action: "allow" };
+				},
+			],
+		});
+		const llm = new FakeLLM([
+			{
+				content: "Running two steps",
+				stopReason: "tool_calls",
+				toolCalls: [
+					{ id: "call_a", name: "read_test", parameters: { step: 1 } },
+					{ id: "call_b", name: "missing_tool", parameters: { step: 2 } },
+				],
+			},
+			{
+				content: "",
+				stopReason: "tool_calls",
+				toolCalls: [{ id: "call_c", name: "read_test", parameters: {} }],
+			},
+			"Final answer",
+		]);
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			toolExecutor,
+		);
+
+		await session.chat("now summarise it", turnContext);
+
+		const userMessages = [
+			"oldest request",
+			"read notes.md",
+			"now summarise it",
+		];
+		expect(seen).toEqual([
+			{
+				userMessages,
+				previousCall: {
+					name: "read_test",
+					parameters: { path: "notes.md" },
+					status: "succeeded",
+				},
+			},
+			{
+				userMessages,
+				previousCall: {
+					name: "missing_tool",
+					parameters: { step: 2 },
+					status: "not_found",
+				},
+			},
+		]);
+		expect(JSON.stringify(seen)).not.toContain("tool output");
+		expect(JSON.stringify(seen)).not.toContain("Sure, I will look");
+	});
+
+	test("leaves the status off a previous call whose stored result predates statuses", async () => {
+		state = new SessionState({
+			initialMessages: [
+				{ role: "user", content: "read notes.md" },
+				{
+					role: "assistant",
+					content: "",
+					toolCalls: [
+						{
+							id: "call_legacy",
+							name: "read_test",
+							parameters: { path: "notes.md" },
+						},
+					],
+				},
+				{ role: "tool", toolCallId: "call_legacy", content: "old output" },
+			],
+		});
+		const tools = new ToolRegistry();
+		tools.register(testTool);
+		const seen: unknown[] = [];
+		const toolExecutor = new ToolExecutor(tools, {
+			preTool: [
+				({ approvalContext }) => {
+					seen.push(approvalContext?.previousCall);
+					return { action: "allow" };
+				},
+			],
+		});
+		const llm = new FakeLLM([
+			{
+				content: "",
+				stopReason: "tool_calls",
+				toolCalls: [{ id: "call_new", name: "read_test", parameters: {} }],
+			},
+			"Final answer",
+		]);
+		const session = new AgentSession(
+			"You are Sonny.",
+			state,
+			llm,
+			tools,
+			toolExecutor,
+		);
+
+		await session.chat("again", turnContext);
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toStrictEqual({
+			name: "read_test",
+			parameters: { path: "notes.md" },
+		});
 	});
 
 	test("stops at the next checkpoint once the turn is aborted", async () => {

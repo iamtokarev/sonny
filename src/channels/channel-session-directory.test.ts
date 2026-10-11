@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CommandRegistry } from "../commands/command-registry";
-import type { Config, ConfigSnapshot } from "../config";
+import {
+	type Config,
+	type ConfigSnapshot,
+	DEFAULT_TOOL_APPROVAL_CONFIG,
+} from "../config";
 import { InMemoryRuntimeEventBus } from "../events";
 import { HistoryStore } from "../history";
 import type { AgentTurnInput, CreateAgentSessionResult } from "../runtime";
@@ -428,6 +432,7 @@ describe("ChannelSessionDirectory", () => {
 				temperature: 0.7,
 				maxTokens: 2_048,
 			},
+			toolApproval: DEFAULT_TOOL_APPROVAL_CONFIG,
 			channels: { telegram: { enabled: false, allowedUserIds: [] } },
 		};
 		const snapshot: ConfigSnapshot = {

@@ -35,6 +35,7 @@ The config shape includes:
 - LLM configuration (`model`, `apiKey`, `temperature`, `maxTokens`, optional `reasoningEffort`)
 - default agent ID and agents path
 - context-compaction settings
+- tool-approval configuration (`toolApproval` — `mode`, `model`, `timeoutMs`, `maxConsecutiveDenials`, `userMessageWindow`, `maxPayloadChars`, `thresholds`); see [auto tool approval](../workflows/auto-tool-approval.md) for what each field does
 - channels configuration (`channels.telegram` with `enabled`, `botToken`, `allowedUserIds`)
 - optional Tavily API key
 
@@ -68,6 +69,7 @@ Generated pages stay under `openwiki/`; keep runtime logs and workspace history 
 - `src/config/load-config.ts`
 - `src/config/parse-config.ts`
 - `src/config/schemas/channels.schema.ts`
+- `src/config/schemas/tool-approval.schema.ts`
 - `src/config/index.ts`
 - `.env.example`
 - `bunfig.toml`

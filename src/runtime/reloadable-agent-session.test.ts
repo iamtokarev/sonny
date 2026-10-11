@@ -4,7 +4,7 @@ import type {
 	ConfigSnapshot,
 	ResolvedConfig,
 } from "../config";
-import { ConfigReloadError } from "../config";
+import { ConfigReloadError, DEFAULT_TOOL_APPROVAL_CONFIG } from "../config";
 import {
 	InMemoryRuntimeEventBus,
 	type RuntimeSource,
@@ -36,6 +36,7 @@ function createConfig(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
 			protectedTailMessages: 6,
 			summaryMaxTokens: 4000,
 		},
+		toolApproval: DEFAULT_TOOL_APPROVAL_CONFIG,
 		channels: {
 			telegram: {
 				enabled: false,

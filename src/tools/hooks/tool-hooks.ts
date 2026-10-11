@@ -1,3 +1,4 @@
+import type { ToolCompletionStatus } from "../../domain";
 import type { RuntimeSource } from "../../events";
 import type { ToolResult } from "../tool";
 
@@ -8,11 +9,42 @@ export type BaseToolHookContext = {
 	parameters: unknown;
 };
 
-export type PreToolContext = BaseToolHookContext;
+/** The tool call that ran before the pending one. Never carries its output. */
+export type PreviousToolCall = {
+	readonly name: string;
+	readonly parameters: unknown;
+	/** Absent for results stored before tool messages carried a status. */
+	readonly status?: ToolCompletionStatus;
+};
 
+/**
+ * A read-only view of the conversation for approval decisions: what the user
+ * asked for and the step before. Assistant prose and tool output are never
+ * part of it, so neither can argue a call past the judge.
+ */
+export interface ApprovalContext {
+	/** The last `limit` user messages, oldest first, text only. */
+	recentUserMessages(limit: number): readonly string[];
+	readonly previousCall: PreviousToolCall | null;
+}
+
+export type PreToolContext = BaseToolHookContext & {
+	/** Absent when the caller has no conversation to offer. */
+	approvalContext?: ApprovalContext;
+	/** The turn's cancellation signal. */
+	signal?: AbortSignal;
+};
+
+/**
+ * `origin: "auto"` marks a decision made automatically on the user's behalf
+ * rather than by a fixed policy. An automatic deny hands the model the
+ * caller-supplied, recoverable `message` verbatim instead of the `BLOCKED:`
+ * wrapper that policy and human denials use.
+ */
 export type PreToolDecision =
-	| { action: "allow" }
+	| { action: "allow"; origin?: "auto" }
 	| { action: "deny"; reason: string }
+	| { action: "deny"; origin: "auto"; message: string }
 	| { action: "ask"; reason?: string }
 	| { action: "updateInput"; parameters: unknown; reason?: string };
 

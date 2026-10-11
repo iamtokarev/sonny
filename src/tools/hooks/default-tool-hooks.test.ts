@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import {
+	DEFAULT_TOOL_APPROVAL_CONFIG,
+	type ToolApprovalConfig,
+} from "../../config";
 import type { TurnContext } from "../../events";
+import type { DecisionModel } from "../approval/decision-model";
 import type { Tool } from "../tool";
 import { ToolExecutor } from "../tool-executor";
 import { ToolRegistry } from "../tool-registry";
@@ -8,6 +13,17 @@ import {
 	enrichFailureForModel,
 	reduceLargeToolOutput,
 } from "./default-tool-hooks";
+
+const manualApproval: ToolApprovalConfig = {
+	...DEFAULT_TOOL_APPROVAL_CONFIG,
+	mode: "manual",
+};
+
+const unusedDecisionModel: DecisionModel = {
+	decide: async () => {
+		throw new Error("manual mode never consults the decision model");
+	},
+};
 
 const turnContext: TurnContext = {
 	sessionId: "session-1",
@@ -39,9 +55,13 @@ describe("default tool hooks", () => {
 
 		const executor = new ToolExecutor(
 			registry,
-			createDefaultToolHooks(async () => {
-				permissionCalled = true;
-				return { approved: true };
+			createDefaultToolHooks({
+				permission: async () => {
+					permissionCalled = true;
+					return { approved: true };
+				},
+				toolApproval: manualApproval,
+				decisionModel: unusedDecisionModel,
 			}),
 		);
 
@@ -87,9 +107,13 @@ describe("default tool hooks", () => {
 
 		const executor = new ToolExecutor(
 			registry,
-			createDefaultToolHooks(async () => {
-				permissionCalled = true;
-				return { approved: true };
+			createDefaultToolHooks({
+				permission: async () => {
+					permissionCalled = true;
+					return { approved: true };
+				},
+				toolApproval: manualApproval,
+				decisionModel: unusedDecisionModel,
 			}),
 		);
 
