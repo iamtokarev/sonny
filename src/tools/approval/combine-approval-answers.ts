@@ -1,19 +1,8 @@
+import type { ToolApprovalThresholds } from "../../config";
 import {
 	type ApprovalQuestion,
 	requestedByUserQuestionId,
 } from "./approval-questions";
-
-/** Probability bands; every boundary is inclusive. */
-export interface ApprovalThresholds {
-	readonly allow: {
-		readonly maxDanger: number;
-		readonly minRequested: number;
-	};
-	readonly deny: {
-		readonly minDanger: number;
-		readonly maxRequested: number;
-	};
-}
 
 export type ApprovalOutcome = "allow" | "deny" | "ask";
 
@@ -34,7 +23,8 @@ export interface CombinedApproval {
 export function combineApprovalAnswers(
 	probabilities: Readonly<Record<string, number>>,
 	questions: readonly ApprovalQuestion[],
-	thresholds: ApprovalThresholds,
+	/** Probability bands; every boundary is inclusive. */
+	thresholds: ToolApprovalThresholds,
 ): CombinedApproval {
 	const answerOf = (question: ApprovalQuestion): number => {
 		const probability = probabilities[question.id];

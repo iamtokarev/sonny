@@ -1,11 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import type { ToolApprovalThresholds } from "../../config";
 import { approvalQuestionsForTool } from "./approval-questions";
-import {
-	type ApprovalThresholds,
-	combineApprovalAnswers,
-} from "./combine-approval-answers";
+import { combineApprovalAnswers } from "./combine-approval-answers";
 
-const defaultThresholds: ApprovalThresholds = {
+const defaultThresholds: ToolApprovalThresholds = {
 	allow: { maxDanger: 0.3, minRequested: 0.6 },
 	deny: { minDanger: 0.8, maxRequested: 0.3 },
 };
@@ -105,7 +103,7 @@ describe("combineApprovalAnswers", () => {
 	});
 
 	test("applies custom thresholds", () => {
-		const strict: ApprovalThresholds = {
+		const strict: ToolApprovalThresholds = {
 			allow: { maxDanger: 0.1, minRequested: 0.9 },
 			deny: { minDanger: 0.5, maxRequested: 0.5 },
 		};
