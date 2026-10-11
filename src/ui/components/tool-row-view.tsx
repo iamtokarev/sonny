@@ -9,6 +9,7 @@ function resultColor(status: ToolRowStatus, theme: Theme): string | undefined {
 		case "ok":
 			return theme.ok;
 		case "truncated":
+		case "auto-denied":
 			return theme.warn;
 		case "error":
 		case "denied":
@@ -52,6 +53,9 @@ export function ToolRowView({
 					<Text
 						color={resultColor(row.status, theme)}
 					>{`  ${row.result}`}</Text>
+				)}
+				{row.approval === undefined ? null : (
+					<Text color={theme.faint}>{`  ${row.approval}`}</Text>
 				)}
 			</Text>
 			{row.detail === null ? null : (

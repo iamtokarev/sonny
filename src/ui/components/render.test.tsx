@@ -88,6 +88,12 @@ describe("ToolRowView", () => {
 		);
 	});
 
+	test("ends the row with the auto-approved label", () => {
+		expect(
+			draw(<ToolRowView row={toolRow({ approval: "auto-approved" })} />),
+		).toBe("  ⏺ bash       bun run test  4.2s  42 pass  auto-approved");
+	});
+
 	test("adds one line of why when a call fails", () => {
 		const output = draw(
 			<ToolRowView

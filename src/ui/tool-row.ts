@@ -1,5 +1,5 @@
 import { formatDuration } from "../cli/tool-display";
-import type { ToolCompletionStatus } from "../domain";
+import type { ToolApprovalOutcome, ToolCompletionStatus } from "../domain";
 import type { ToolCompletedEvent, ToolStartedEvent } from "../events";
 
 /**
@@ -8,8 +8,9 @@ import type { ToolCompletedEvent, ToolStartedEvent } from "../events";
  *   glyph · name(10) · preview · duration · result
  *
  * Only failures earn a second line. `denied` is you; `blocked` is the file and
- * URL policies deciding before you were asked; `missing` is the model asking
- * for a tool this session does not have.
+ * URL policies deciding before you were asked; `auto-denied` is the automatic
+ * approval check refusing on your behalf; `missing` is the model asking for a
+ * tool this session does not have.
  */
 export type ToolRowStatus =
 	| "running"
@@ -17,6 +18,7 @@ export type ToolRowStatus =
 	| "error"
 	| "denied"
 	| "blocked"
+	| "auto-denied"
 	| "missing"
 	| "truncated";
 
@@ -29,6 +31,8 @@ export type ToolRow = {
 	result: string | null;
 	/** One line of why, shown under the row when something went wrong. */
 	detail: string | null;
+	/** Set when the call ran because the automatic check approved it. */
+	approval?: "auto-approved";
 };
 
 /** The reason the composer sends when you decline, so we can tell it apart. */
@@ -239,14 +243,27 @@ function summariseSuccess(
 }
 
 /**
- * The runtime says the call was refused; the message says by whom. Only you and
- * the policies can refuse, so the reason text is what separates them.
+ * The runtime says the call was refused; the approval outcome says by whom.
+ * Older events carry no outcome, so the reason text separates you from the
+ * policies there.
  */
 function summariseRefusal(
 	content: string,
+	approval: ToolApprovalOutcome | undefined,
 ): Pick<ToolRow, "status" | "result" | "detail"> {
+	if (approval === "auto-denied") {
+		return {
+			status: "auto-denied",
+			result: "auto-denied",
+			detail: truncate(collapse(firstLine(content)), maxDetailWidth) || null,
+		};
+	}
+
 	const isUserDecision =
-		content.includes(userDenialReason) || content.includes(turnCancelledReason);
+		approval === undefined
+			? content.includes(userDenialReason) ||
+				content.includes(turnCancelledReason)
+			: approval === "user-denied";
 
 	return {
 		status: isUserDecision ? "denied" : "blocked",
@@ -287,12 +304,13 @@ export function summariseToolResult(
 	toolName: string,
 	status: ToolCompletionStatus,
 	content: string,
+	approval?: ToolApprovalOutcome,
 ): Pick<ToolRow, "status" | "result" | "detail"> {
 	switch (status) {
 		case "succeeded":
 			return summariseSuccess(toolName, content);
 		case "denied":
-			return summariseRefusal(content);
+			return summariseRefusal(content, approval);
 		case "not_found":
 			return {
 				status: "missing",
@@ -305,11 +323,23 @@ export function summariseToolResult(
 }
 
 export function createToolRow(event: ToolCompletedEvent): ToolRow {
+	const summary = summariseToolResult(
+		event.toolName,
+		event.status,
+		event.content,
+		event.approval,
+	);
+	// Failures already earn a second line; the label marks calls that went well.
+	const succeeded = summary.status === "ok" || summary.status === "truncated";
+
 	return {
 		toolName: event.toolName,
 		preview: describeToolCall(event.toolName, event.parameters),
 		duration: formatDuration(event.durationMs),
-		...summariseToolResult(event.toolName, event.status, event.content),
+		...summary,
+		...(event.approval === "auto-approved" && succeeded
+			? { approval: "auto-approved" as const }
+			: {}),
 	};
 }
 

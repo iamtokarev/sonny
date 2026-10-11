@@ -618,4 +618,132 @@ describe("ToolExecutor", () => {
 
 		expect(result).toEqual({ ok: true, content: "done" });
 	});
+	describe("approval outcome", () => {
+		async function executeAndCollect(hooks: ToolHooks): Promise<{
+			result: ToolResult;
+			completed: RuntimeEvent | undefined;
+		}> {
+			const events: RuntimeEvent[] = [];
+			eventBus.subscribe((event) => {
+				events.push(event);
+			});
+			const result = await executeTool(new ToolExecutor(registry, hooks), {
+				id: "call_approval",
+				name: "test_tool",
+				parameters: {},
+			});
+
+			return {
+				result,
+				completed: events.find((event) => event.type === "tool.completed"),
+			};
+		}
+
+		test("an automatic allow marks the call auto-approved and leaves the result untouched", async () => {
+			const { result, completed } = await executeAndCollect({
+				preTool: [() => ({ action: "allow", origin: "auto" })],
+			});
+
+			expect(result).toEqual({ ok: true, content: "done" });
+			expect(completed).toMatchObject({
+				status: "succeeded",
+				approval: "auto-approved",
+			});
+		});
+
+		test("ask beats an automatic allow: the user is still prompted", async () => {
+			let prompts = 0;
+			const { result, completed } = await executeAndCollect({
+				preTool: [
+					() => ({ action: "allow", origin: "auto" }),
+					() => ({ action: "ask" }),
+				],
+				permission: async () => {
+					prompts += 1;
+					return { approved: true };
+				},
+			});
+
+			expect(prompts).toBe(1);
+			expect(result).toEqual({ ok: true, content: "done" });
+			expect(completed).toMatchObject({ approval: "user-approved" });
+		});
+
+		test("an automatic deny returns the caller's recoverable message instead of BLOCKED", async () => {
+			let executed = false;
+			registry.register(
+				createTestTool("guarded_tool", async () => {
+					executed = true;
+					return { ok: true, content: "done" };
+				}),
+			);
+			const message =
+				"Not run automatically: it does not match what you asked for. Try a narrower call.";
+			const events: RuntimeEvent[] = [];
+			eventBus.subscribe((event) => {
+				events.push(event);
+			});
+			const executor = new ToolExecutor(registry, {
+				preTool: [() => ({ action: "deny", origin: "auto", message })],
+			});
+
+			const result = await executeTool(executor, {
+				id: "call_auto_denied",
+				name: "guarded_tool",
+				parameters: {},
+			});
+
+			expect(executed).toBe(false);
+			expect(result).toEqual({ ok: false, error: message, reason: "denied" });
+			expect(events).toHaveLength(1);
+			expect(events[0]).toMatchObject({
+				type: "tool.completed",
+				status: "denied",
+				content: message,
+				approval: "auto-denied",
+			});
+		});
+
+		test("a user denial keeps BLOCKED and is marked user-denied", async () => {
+			const { result, completed } =
+				await executeAndCollect(denyPermissionHooks);
+
+			expect(result.ok).toBe(false);
+			expect(result.ok ? "" : result.error).toStartWith("BLOCKED:");
+			expect(completed).toMatchObject({
+				status: "denied",
+				approval: "user-denied",
+			});
+		});
+
+		test("a policy deny keeps BLOCKED and is marked policy-blocked, even after an automatic allow", async () => {
+			const { result, completed } = await executeAndCollect({
+				preTool: [
+					() => ({ action: "allow", origin: "auto" }),
+					() => ({ action: "deny", reason: "outside the workspace" }),
+				],
+			});
+
+			expect(result.ok ? "" : result.error).toStartWith("BLOCKED:");
+			expect(completed).toMatchObject({
+				status: "denied",
+				approval: "policy-blocked",
+			});
+		});
+
+		test("an ask with no permission hook is marked policy-blocked", async () => {
+			const { completed } = await executeAndCollect({
+				preTool: [() => ({ action: "ask" })],
+			});
+
+			expect(completed).toMatchObject({ approval: "policy-blocked" });
+		});
+
+		test("a plain allow carries no approval outcome", async () => {
+			const { completed } = await executeAndCollect(allowHooks);
+
+			expect(completed).toBeDefined();
+			expect(completed).not.toHaveProperty("approval");
+		});
+	});
 });

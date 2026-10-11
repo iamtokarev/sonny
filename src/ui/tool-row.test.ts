@@ -70,6 +70,70 @@ describe("createToolRow", () => {
 		});
 	});
 
+	test("labels a successful auto-approved call", () => {
+		const row = createToolRow(completed({ approval: "auto-approved" }));
+
+		expect(row).toMatchObject({
+			status: "ok",
+			result: "42 pass",
+			approval: "auto-approved",
+		});
+	});
+
+	test("adds no approval label when no automatic approval applied", () => {
+		expect(createToolRow(completed()).approval).toBeUndefined();
+		expect(
+			createToolRow(completed({ approval: "user-approved" })).approval,
+		).toBeUndefined();
+		expect(
+			createToolRow(
+				completed({
+					approval: "auto-approved",
+					content: JSON.stringify({ exitCode: 1, stdout: "", stderr: "x" }),
+				}),
+			).approval,
+		).toBeUndefined();
+	});
+
+	test("shows an auto denial apart from your denial and a policy block", () => {
+		const row = createToolRow(
+			completed({
+				status: "denied",
+				approval: "auto-denied",
+				content:
+					"Not run automatically: it does not match what you asked for.\nTry again.",
+			}),
+		);
+
+		expect(row).toMatchObject({
+			status: "auto-denied",
+			result: "auto-denied",
+			detail: "Not run automatically: it does not match what you asked for.",
+		});
+	});
+
+	test("trusts the approval outcome over the message text", () => {
+		const denied = createToolRow(
+			completed({
+				status: "denied",
+				approval: "user-denied",
+				content: "BLOCKED: not allowed. Reason: User denied this tool call.",
+			}),
+		);
+		const blocked = createToolRow(
+			completed({
+				status: "denied",
+				approval: "policy-blocked",
+				content: `BLOCKED: not allowed. Reason: Blocked by policy: mentions ${userDenialReason}`,
+			}),
+		);
+
+		expect(denied.status).toBe("denied");
+		expect(denied.detail).toBe("you declined this call");
+		expect(blocked.status).toBe("blocked");
+		expect(blocked.detail).toStartWith("policy: Blocked by policy:");
+	});
+
 	test("reports a non-zero exit with one line of why", () => {
 		const row = createToolRow(
 			completed({

@@ -1,6 +1,6 @@
 import { randomUUIDv7 } from "bun";
 import type { ConfigSection } from "../config";
-import type { ToolCompletionStatus } from "../domain";
+import type { ToolApprovalOutcome, ToolCompletionStatus } from "../domain";
 import type { RuntimeSource, TurnContext } from "./turn-context";
 
 interface RuntimeEventBase {
@@ -53,6 +53,8 @@ export interface ToolCompletedEvent extends RuntimeEventBase {
 	readonly status: ToolCompletionStatus;
 	readonly content: string;
 	readonly durationMs: number;
+	/** Who approved or refused the call; absent when no approval step applied. */
+	readonly approval?: ToolApprovalOutcome;
 }
 
 /**
