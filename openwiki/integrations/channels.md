@@ -116,7 +116,7 @@ Resume safety: if a bound history session cannot be resumed, the directory throw
 
 ## Remote tool approval
 
-`ChannelApprovalBroker` (`src/channels/channel-approval-broker.ts`) is the channel-side `PermissionHook`. When `createAgentSession` is wired by `createChannelGateway`, `approveToolCall` is `(request) => approvals.request(request)`. The broker:
+`ChannelApprovalBroker` (`src/channels/channel-approval-broker.ts`) is the channel-side `PermissionHook` — the last step that runs only when the auto approval hook escalates (`ask`) in auto mode. In auto mode the [auto approval hook](../workflows/auto-tool-approval.md) judges each call first and only escalates verdict-`ask` calls (or all calls in manual mode) to the broker; auto-approved and auto-denied calls never reach the channel. When `createAgentSession` is wired by `createChannelGateway`, `approveToolCall` is `(request) => approvals.request(request)`. The broker:
 
 1. Rejects non-channel requests immediately ("Remote approval is only available for channel-originated tool calls") without delivery.
 2. Rejects already-aborted turns immediately.

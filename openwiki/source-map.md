@@ -15,13 +15,13 @@ This page is a navigation aid for the code paths that matter most in the first-p
 - `src/cli/main.ts` — command-line entrypoint; opens `ConfigStore`, then starts the `chat` or `gateway` command
 - `src/cli/chat-loop.tsx` — interactive Ink UI, event subscription, command handling, 5-second config-poll interval
 - `src/cli/gateway-command.ts` — `runGatewayCommand`: headless lifecycle for the channel gateway (SIGINT/SIGTERM)
-- `src/runtime/create-agent-session.ts` — runtime composition root; defines the `AgentSessionBuilder` factory and wraps it in `ReloadableAgentSession`
+- `src/runtime/create-agent-session.ts` — runtime composition root; defines the `AgentSessionBuilder` factory and wraps it in `ReloadableAgentSession`; constructs the `OpenRouterDecisionModel` from `config.toolApproval`
 - `src/runtime/agent-runtime.ts` — turn serialization, turn lifecycle events, and pre-turn/pre-compact config refresh
 - `src/runtime/reloadable-agent-session.ts` — hot-reload wrapper implementing `ConfigurableAgentRuntimeSession`; advances snapshots or rebuilds the live runtime
 - `src/runtime/runtime-config-signature.ts` — SHA-256 signature over runtime-affecting config fields (decides whether a reload rebuilds)
-- `src/agent/agent-session.ts` — conversation engine
+- `src/agent/agent-session.ts` — conversation engine; passes `createApprovalContext()` to `ToolExecutor.execute`
 - `src/agent/session-state.ts` — mutable message state
-- `src/domain/message.ts` — message, tool-call, and `ToolCompletionStatus` types
+- `src/domain/message.ts` — message, tool-call, `ToolCompletionStatus`, and `ToolApprovalOutcome` types (`auto-approved`/`auto-denied`/`user-approved`/`user-denied`/`policy-blocked`)
 
 ## Event system
 
@@ -61,8 +61,15 @@ This page is a navigation aid for the code paths that matter most in the first-p
 ## Tools and guardrails
 
 - `src/tools/create-tool-registry.ts` — default capability registration
-- `src/tools/tool-executor.ts` — approval, policy, execution, result transforms, tool event emission
-- `src/tools/hooks/default-tool-hooks.ts` — default guardrails
+- `src/tools/tool-executor.ts` — approval, policy, execution, result transforms, tool event emission; sets `ToolApprovalOutcome` on `tool.completed`
+- `src/tools/hooks/default-tool-hooks.ts` — default guardrails; selects auto or manual approval hooks from `toolApproval.mode`
+- `src/tools/hooks/tool-hooks.ts` — `PreToolContext`/`PreToolDecision`/`ApprovalContext` contracts the auto approval hook builds on
+- `src/tools/approval/auto-approval-hook.ts` — `createAutoApprovalHooks`: asks the decision model, combines against thresholds, tracks the denial streak, returns `allow`/`deny`/`ask`
+- `src/tools/approval/decision-model.ts` — `DecisionModel` interface and `OpenRouterDecisionModel` adapter (OpenRouter Decisions API, timeout/abort handling)
+- `src/tools/approval/approval-questions.ts` — the shared + per-tool question set and `approvalQuestionsForTool`
+- `src/tools/approval/combine-approval-answers.ts` — `combineApprovalAnswers`: probabilities → `allow`/`deny`/`ask` verdict against `ToolApprovalThresholds`
+- `src/tools/approval/cap-payload.ts` — `capToolParameters`: fits call parameters into `maxPayloadChars`, shortening only content fields
+- `src/agent/approval-context.ts` — `createApprovalContext`: recent user messages + previous call for the decision model
 - `src/tools/policies/*` — file and web destination policy checks
 - `src/tools/builtin/*` — read/write/edit/bash/skill/web tools
 - `src/cli/tool-display.ts` — formats `ToolCompletedEvent` for TUI display
@@ -89,7 +96,7 @@ This page is a navigation aid for the code paths that matter most in the first-p
 - `src/config/config-error.ts` — `ConfigReloadError` and `toSafeConfigError()` (never exposes rejected secret values)
 - `src/config/load-config.ts` — reads YAML config and a dotenv file, merging env overrides
 - `src/config/parse-config.ts` — schema validation
-- `src/config/schemas/*` — config schemas and defaults
+- `src/config/schemas/*` — config schemas and defaults (including `tool-approval.schema.ts`)
 - `src/config/index.ts` — barrel exports including `DEFAULT_CONFIG_PATH` and `DEFAULT_ENV_PATH`
 - `src/llm/llm-provider.ts` — model provider abstraction
 

@@ -15,6 +15,7 @@ Start here, then follow the linked pages for the major implementation areas:
 - [Architecture overview](architecture/overview.md) — how the CLI, runtime, session state, and tool execution fit together.
 - [Command and chat workflow](workflows/chat-and-commands.md) — how input moves from the TUI into the agent session and back.
 - [Tools and guardrails](integrations/tools.md) — built-in file, shell, skill, and optional Tavily web tools plus approval/policy hooks.
+- [Auto tool approval](workflows/auto-tool-approval.md) — the `toolApproval` config (auto/manual), the Jev decision model via the OpenRouter Decisions API, the approval question set and verdict combiner, the auto approval hook, and the auto-approved/auto-denied tool-row labels.
 - [Channels and gateway](integrations/channels.md) — messaging channel subsystem (Telegram adapter), persistent conversation→session bindings, remote tool approval via inline buttons, and the `gateway` command.
 - [Context and history](data/context-and-history.md) — persistence, resume/continue behavior, and compaction.
 - [Configuration and operations](operations/configuration.md) — config loading, the `ConfigStore` hot-reload store, workspace layout, CI, and the OpenWiki refresh workflow.
@@ -23,7 +24,7 @@ Start here, then follow the linked pages for the major implementation areas:
 
 ## What this wiki covers
 
-The repository has evolved from a basic chat loop into a local agent platform. Recent work added tools, skills, JSONL persistence, slash commands, compaction, and web tools; then rebuilt the TUI around a component-based Mulberry design system (`src/ui/`), added real turn cancellation via `AbortSignal`, and surfaced context compaction through the event bus. The latest changes added a **messaging channels** subsystem (`src/channels/`) with a Telegram adapter, a headless `gateway` CLI command, persistent conversation→session bindings, remote tool approval through inline buttons, a `/new` session-reset control, and a shared `SessionInteractor` input path, so the wiki focuses on those seams rather than every source file.
+The repository has evolved from a basic chat loop into a local agent platform. Recent work added tools, skills, JSONL persistence, slash commands, compaction, and web tools; then rebuilt the TUI around a component-based Mulberry design system (`src/ui/`), added real turn cancellation via `AbortSignal`, and surfaced context compaction through the event bus. The latest changes added a **messaging channels** subsystem (`src/channels/`) with a Telegram adapter, a headless `gateway` CLI command, persistent conversation→session bindings, remote tool approval through inline buttons, a `/new` session-reset control, and a shared `SessionInteractor` input path; and an **automatic tool approval** feature that lets a pinned decision model (Jev, via the OpenRouter Decisions API) judge each tool call against a fixed question set and thresholds, so the wiki focuses on those seams rather than every source file.
 
 ## How the runtime is organized
 
@@ -63,6 +64,11 @@ If you want to jump straight into code, start with these files:
 - `src/events/event-bus.ts`
 - `src/tools/create-tool-registry.ts`
 - `src/tools/tool-executor.ts`
+- `src/tools/hooks/default-tool-hooks.ts`
+- `src/tools/approval/auto-approval-hook.ts`
+- `src/tools/approval/decision-model.ts`
+- `src/agent/approval-context.ts`
+- `src/config/schemas/tool-approval.schema.ts`
 - `src/context/context-manager.ts`
 - `src/history/history-store.ts`
 - `src/skills/load-skills.ts`
@@ -90,6 +96,7 @@ If you want to jump straight into code, start with these files:
 | Config hot-reload | [configuration](operations/configuration.md), [architecture overview](architecture/overview.md) | `src/config/config-store.ts`, `src/runtime/reloadable-agent-session.ts`, `src/runtime/runtime-config-signature.ts` | `ConfigStore.refresh`, `ReloadableAgentSession.refreshConfiguration`, `RuntimeConfigurationResult`, `createRuntimeConfigSignature` | `config-store.test.ts`, `reloadable-agent-session.test.ts`, `runtime-config-signature.test.ts` | `bun test src/config/config-store.test.ts src/runtime/reloadable-agent-session.test.ts` |
 | `/reload` command / TUI poll | [chat workflow](workflows/chat-and-commands.md) | `src/commands/builtin/reload-command.ts`, `src/cli/chat-loop.tsx` | `createReloadCommand`, `createConfigPollTick`, `describeConfigReloaded` | `reload-command.test.ts`, `chat-loop.test.ts` ("createConfigPollTick"), `chat-loop.ui.test.tsx` ("forces manual reload") | `bun test src/commands/builtin/reload-command.test.ts src/cli/chat-loop.test.ts` |
 | Tool registry / guardrails | [tools and guardrails](integrations/tools.md) | `src/tools/create-tool-registry.ts`, `src/tools/tool-executor.ts` | `ToolExecutor.execute`, `ToolCompletionStatus` | `tool-executor` tests, `default-tool-hooks` tests | `bun test src/tools` |
+| Auto tool approval | [auto tool approval](workflows/auto-tool-approval.md) | `src/tools/approval/auto-approval-hook.ts`, `src/tools/approval/decision-model.ts`, `src/tools/hooks/default-tool-hooks.ts`, `src/config/schemas/tool-approval.schema.ts` | `createAutoApprovalHooks`, `DecisionModel`/`OpenRouterDecisionModel`, `approvalQuestionsForTool`, `combineApprovalAnswers`, `ToolApprovalOutcome`, `ToolApprovalConfig` | `auto-approval-hook.test.ts`, `decision-model.test.ts`, `approval-questions.test.ts`, `combine-approval-answers.test.ts`, `tool-row.test.ts`, `parse-config.test.ts` | `bun test src/tools/approval` |
 | Context compaction | [context and history](data/context-and-history.md) | `src/context/context-manager.ts`, `src/context/token-counter.ts` | `ContextManager.prepare`, `context.compaction.*` events | context-manager tests | `bun test src/context` |
 | Resume / continue | [chat workflow](workflows/chat-and-commands.md), [context and history](data/context-and-history.md) | `src/cli/main.ts`, `src/history/history-store.ts`, `src/runtime/create-agent-session.ts` | `resolveChatSessionSelection`, `CreateAgentSessionMode` | `create-agent-session.test.ts` (resume/continue) | `bun test src/runtime/create-agent-session.test.ts` |
 | Channels / gateway | [channels and gateway](integrations/channels.md), [gateway workflow](workflows/channel-gateway-workflow.md) | `src/channels/channel-gateway.ts`, `src/channels/create-channel-gateway.ts`, `src/cli/gateway-command.ts` | `ChannelGateway.run`, `createChannelGateway`, `createChannelAccessCheck`, `ChannelSessionDirectory` | `channel-gateway.test.ts`, `create-channel-gateway.test.ts`, `gateway-command.test.ts` | `bun test src/channels/channel-gateway.test.ts src/channels/create-channel-gateway.test.ts src/cli/gateway-command.test.ts` |

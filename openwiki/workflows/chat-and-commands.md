@@ -54,7 +54,7 @@ The TUI shows a resumed-session banner when applicable and displays a final remi
 
 ## Tool approval in the UI
 
-When the model wants to call a tool, the UI pauses for approval if the tool hooks request permission. The approval prompt is part of the interactive loop, not a separate batch workflow. After approval, `ToolExecutor` publishes `tool.started` and `tool.completed` events through the event bus; the chat loop subscribes (filtered by `sessionId`) and renders tool progress and results from those events rather than from direct return values.
+When the model wants to call a tool, the approval layer decides whether to run it. By default `toolApproval.mode` is `auto`, so a pinned decision model judges each call against a fixed question set before the user is asked; the full decision model, question set, threshold combiner, and denial-streak logic are documented in [auto tool approval](auto-tool-approval.md). When the auto approval hook requests permission (verdict `ask`, or `manual` mode, or the model is unavailable), the UI pauses for an interactive approval. The approval prompt is part of the interactive loop, not a separate batch workflow. After approval, `ToolExecutor` publishes `tool.started` and `tool.completed` events through the event bus; the chat loop subscribes (filtered by `sessionId`) and renders tool progress and results from those events rather than from direct return values. The `tool.completed` event carries an `approval: ToolApprovalOutcome` so the TUI can label `auto-approved` and `auto-denied` rows distinctly (see [auto tool approval](auto-tool-approval.md) for the row labels).
 
 That design keeps high-risk operations explicit while still allowing the model to use tools for normal repository work.
 

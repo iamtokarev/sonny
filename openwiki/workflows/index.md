@@ -1,4 +1,5 @@
 # Files
 
+- [Auto tool approval](auto-tool-approval.md) - Documents the automatic tool-call approval feature — toolApproval config (auto/manual), the Jev decision model via the OpenRouter Decisions API, the approval question set and verdict combiner, payload capping, the auto approval hook, approval context plumbing, the approval outcome on tool.completed, and the auto-approved/auto-denied tool-row labels.
 - [Sonny channel gateway workflow](channel-gateway-workflow.md) - Describes how the gateway CLI command starts channels, how inbound messages and approval actions flow through SessionInteractor into the agent runtime, how /new resets a conversation, and how shutdown drains work safely.
 - [Sonny chat and command workflow](chat-and-commands.md) - Describes how the interactive TUI handles user input, slash commands, session selection, tool approvals, config hot-reload polling and the /reload command, and resume/continue behavior. Also notes the shared SessionInteractor input path used by the channel gateway.
