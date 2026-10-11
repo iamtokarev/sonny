@@ -7,8 +7,9 @@ export type ToolCompletionStatus =
 	| "not_found";
 
 /**
- * Who let a tool call run or refused it. Absent when no approval step applied
- * (no hook asked, decided automatically or denied).
+ * Who let a tool call run or refused it: the automatic check, the user, or a
+ * fixed policy. Absent when nothing made an approval decision, e.g. every
+ * hook simply allowed the call or the tool did not exist.
  */
 export type ToolApprovalOutcome =
 	| "auto-approved"

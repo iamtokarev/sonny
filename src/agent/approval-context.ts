@@ -27,7 +27,9 @@ function findPreviousCall(
 			return {
 				name: call.name,
 				parameters: call.parameters,
-				status: lastResult.status ?? null,
+				...(lastResult.status === undefined
+					? {}
+					: { status: lastResult.status }),
 			};
 		}
 	}

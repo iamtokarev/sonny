@@ -34,7 +34,7 @@ function outcome(
 		bashAnswers(overrides),
 		bashQuestions,
 		thresholds,
-	).outcome;
+	).verdict;
 }
 
 function failedCheckIds(

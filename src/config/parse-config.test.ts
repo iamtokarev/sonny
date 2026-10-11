@@ -236,6 +236,8 @@ describe("parseConfig", () => {
 		["a negative threshold", { thresholds: { deny: { maxRequested: -0.1 } } }],
 		["a non-positive timeout", { timeoutMs: 0 }],
 		["a negative denial limit", { maxConsecutiveDenials: -1 }],
+		["a zero denial limit", { maxConsecutiveDenials: 0 }],
+		["a fractional denial limit", { maxConsecutiveDenials: 1.5 }],
 	])("rejects tool approval config with %s", (_label, toolApproval) => {
 		expect(() =>
 			parseConfig(

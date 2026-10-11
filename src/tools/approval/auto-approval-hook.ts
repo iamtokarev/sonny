@@ -10,7 +10,7 @@ import {
 	type ApprovalQuestion,
 	approvalQuestionsForTool,
 } from "./approval-questions";
-import { capStringPayload } from "./cap-payload";
+import { capToolParameters } from "./cap-payload";
 import {
 	type CombinedApproval,
 	combineApprovalAnswers,
@@ -53,30 +53,55 @@ function createAutoDenialMessage(
 	);
 }
 
+/**
+ * The state the decision model judges, within `maxPayloadChars` string
+ * characters for both calls together. The pending call comes first; the
+ * previous call gets what is left and loses its parameters, rather than
+ * costing the pending call its judgement, when they cannot fit. `null` when
+ * the pending call cannot be shown without cutting more than its content.
+ */
 function buildState(
 	context: PreToolContext,
 	config: ToolApprovalConfig,
-): Record<string, unknown> {
-	const previousCall = context.approval?.previousCall ?? null;
+): Record<string, unknown> | null {
+	const pending = capToolParameters(
+		context.toolName,
+		context.parameters,
+		config.maxPayloadChars,
+	);
+
+	if (pending === null) {
+		return null;
+	}
+
+	const previousCall = context.approvalContext?.previousCall ?? null;
+	const previous =
+		previousCall === null
+			? null
+			: capToolParameters(
+					previousCall.name,
+					previousCall.parameters,
+					config.maxPayloadChars - pending.chars,
+				);
 
 	return {
 		user_messages:
-			context.approval?.recentUserMessages(config.userMessageWindow) ?? [],
+			context.approvalContext?.recentUserMessages(config.userMessageWindow) ??
+			[],
 		previous_call:
 			previousCall === null
 				? null
 				: {
 						tool: previousCall.name,
-						parameters: capStringPayload(
-							previousCall.parameters,
-							config.maxPayloadChars,
-						),
-						status: previousCall.status,
+						...(previous === null ? {} : { parameters: previous.parameters }),
+						...(previousCall.status === undefined
+							? {}
+							: { status: previousCall.status }),
 					},
 		pending_call: {
 			tool: context.toolName,
 			description: context.description,
-			parameters: capStringPayload(context.parameters, config.maxPayloadChars),
+			parameters: pending.parameters,
 		},
 	};
 }
@@ -105,12 +130,24 @@ export function createAutoApprovalHooks({
 	};
 
 	const preTool: PreToolHook = async (context): Promise<PreToolDecision> => {
+		const state = buildState(context, config);
+
+		if (state === null) {
+			// Shortening a command, path or URL could hide what makes it
+			// dangerous, so a call too large to show whole goes to the user.
+			logger.info("tool.auto_approval.payload_too_large", {
+				toolName: context.toolName,
+				toolCallId: context.toolCallId,
+			});
+			return { action: "ask" };
+		}
+
 		const questions = approvalQuestionsForTool(context.toolName);
 		let combined: CombinedApproval;
 
 		try {
 			const probabilities = await decisionModel.decide({
-				state: buildState(context, config),
+				state,
 				questions: Object.fromEntries(
 					questions.map((question) => [question.id, question.instructions]),
 				),
@@ -135,13 +172,13 @@ export function createAutoApprovalHooks({
 			return { action: "ask" };
 		}
 
-		const { outcome, failedChecks } = combined;
+		const { verdict, failedChecks } = combined;
 
-		if (outcome === "allow") {
+		if (verdict === "allow") {
 			return { action: "allow", origin: "auto" };
 		}
 
-		if (outcome === "deny") {
+		if (verdict === "deny") {
 			if (consecutiveDenials >= config.maxConsecutiveDenials) {
 				return { action: "ask" };
 			}
