@@ -70,6 +70,7 @@ describe("TavilyWebProvider", () => {
 				): Promise<TavilySearchResponse> =>
 					createSearchResponse([
 						{
+							id: "result-1",
 							title: "TypeScript",
 							url: "https://www.typescriptlang.org/",
 							content: "TypeScript is JavaScript with syntax for types.",
