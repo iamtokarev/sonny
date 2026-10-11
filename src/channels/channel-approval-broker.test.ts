@@ -184,29 +184,35 @@ describe("ChannelApprovalBroker", () => {
 		{ channel: "other-channel" },
 		{ conversationId: "other-conversation" },
 		{ userId: "other-user" },
-	] satisfies readonly Partial<ChannelSource>[])("keeps an approval pending after a wrong-source action", async (sourceOverride) => {
-		const delivery = captureDelivery();
-		const broker = new ChannelApprovalBroker(delivery.deliver);
-		const decision = broker.request(request());
-		const value = actionValue(delivery.outputs[0] as ChannelOutput, "Approve");
-		let settled = false;
-		void decision.then(() => {
-			settled = true;
-		});
+	] satisfies readonly Partial<ChannelSource>[])(
+		"keeps an approval pending after a wrong-source action",
+		async (sourceOverride) => {
+			const delivery = captureDelivery();
+			const broker = new ChannelApprovalBroker(delivery.deliver);
+			const decision = broker.request(request());
+			const value = actionValue(
+				delivery.outputs[0] as ChannelOutput,
+				"Approve",
+			);
+			let settled = false;
+			void decision.then(() => {
+				settled = true;
+			});
 
-		expect(
-			broker.resolve({
-				type: "action",
-				source: actionSource(sourceOverride),
-				value,
-			}),
-		).toBe(true);
-		await Promise.resolve();
-		expect(settled).toBe(false);
+			expect(
+				broker.resolve({
+					type: "action",
+					source: actionSource(sourceOverride),
+					value,
+				}),
+			).toBe(true);
+			await Promise.resolve();
+			expect(settled).toBe(false);
 
-		broker.resolve({ type: "action", source: actionSource(), value });
-		await expect(decision).resolves.toEqual({ approved: true });
-	});
+			broker.resolve({ type: "action", source: actionSource(), value });
+			await expect(decision).resolves.toEqual({ approved: true });
+		},
+	);
 
 	test("consumes duplicate and expired approval actions harmlessly", async () => {
 		const delivery = captureDelivery();

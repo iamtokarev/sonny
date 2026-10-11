@@ -153,49 +153,49 @@ describe("runGatewayCommand", () => {
 		expect(signals.listenerCount("SIGTERM")).toBe(0);
 	});
 
-	test.each([
-		"SIGINT",
-		"SIGTERM",
-	] as const)("aborts on %s and removes both signal handlers", async (signal) => {
-		const configStore = createConfigStore();
-		const events = new InMemoryRuntimeEventBus();
-		const signals = new FakeSignals();
-		const started = deferred<AbortSignal>();
-		let constructionOptions: unknown;
-		const execution = runGatewayCommand({
-			configStore,
-			events,
-			signals,
-			terminal: { writeLine: () => {} },
-			createGateway: async (options) => {
-				constructionOptions = options;
-				return {
-					run: async (abortSignal) => {
-						started.resolve(abortSignal);
-						if (!abortSignal.aborted) {
-							await new Promise<void>((resolve) =>
-								abortSignal.addEventListener("abort", () => resolve(), {
-									once: true,
-								}),
-							);
-						}
-					},
-				};
-			},
-		});
-		const abortSignal = await started.promise;
+	test.each(["SIGINT", "SIGTERM"] as const)(
+		"aborts on %s and removes both signal handlers",
+		async (signal) => {
+			const configStore = createConfigStore();
+			const events = new InMemoryRuntimeEventBus();
+			const signals = new FakeSignals();
+			const started = deferred<AbortSignal>();
+			let constructionOptions: unknown;
+			const execution = runGatewayCommand({
+				configStore,
+				events,
+				signals,
+				terminal: { writeLine: () => {} },
+				createGateway: async (options) => {
+					constructionOptions = options;
+					return {
+						run: async (abortSignal) => {
+							started.resolve(abortSignal);
+							if (!abortSignal.aborted) {
+								await new Promise<void>((resolve) =>
+									abortSignal.addEventListener("abort", () => resolve(), {
+										once: true,
+									}),
+								);
+							}
+						},
+					};
+				},
+			});
+			const abortSignal = await started.promise;
 
-		expect(constructionOptions).toEqual({ configStore, events });
-		expect(signals.listenerCount("SIGINT")).toBe(1);
-		expect(signals.listenerCount("SIGTERM")).toBe(1);
-		signals.emit(signal);
-		await execution;
+			expect(constructionOptions).toEqual({ configStore, events });
+			expect(signals.listenerCount("SIGINT")).toBe(1);
+			expect(signals.listenerCount("SIGTERM")).toBe(1);
+			signals.emit(signal);
+			await execution;
 
-		expect(abortSignal.aborted).toBe(true);
-		expect(signals.listenerCount("SIGINT")).toBe(0);
-		expect(signals.listenerCount("SIGTERM")).toBe(0);
-		expect(signals.removed).toEqual(["SIGINT", "SIGTERM"]);
-	});
+			expect(abortSignal.aborted).toBe(true);
+			expect(signals.listenerCount("SIGINT")).toBe(0);
+			expect(signals.listenerCount("SIGTERM")).toBe(0);
+			expect(signals.removed).toEqual(["SIGINT", "SIGTERM"]);
+		},
+	);
 
 	test("removes signal handlers when the gateway fails", async () => {
 		const failure = new Error("polling failed");

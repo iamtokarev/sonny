@@ -1444,28 +1444,31 @@ describe("ChannelGateway approval actions", () => {
 	test.each([
 		["Approve", true],
 		["Deny", false],
-	] as const)("lets the %s action resolve the waiting turn without entering its queue", async (label, approved) => {
-		const approvalRequested = deferred<void>();
-		const harness = await createHarness({
-			runTurn: approvalRunTurn(approvalRequested),
-		});
-		const waitingTurn = harness.adapter.emit(
-			message("conversation-1", "Use a tool"),
-		);
-		await approvalRequested.promise;
-		const approvalOutput = harness.adapter.sent[0] as ChannelOutput;
-		const value = outputAction(approvalOutput, label);
+	] as const)(
+		"lets the %s action resolve the waiting turn without entering its queue",
+		async (label, approved) => {
+			const approvalRequested = deferred<void>();
+			const harness = await createHarness({
+				runTurn: approvalRunTurn(approvalRequested),
+			});
+			const waitingTurn = harness.adapter.emit(
+				message("conversation-1", "Use a tool"),
+			);
+			await approvalRequested.promise;
+			const approvalOutput = harness.adapter.sent[0] as ChannelOutput;
+			const value = outputAction(approvalOutput, label);
 
-		await harness.adapter.emit(action("conversation-1", value));
-		await waitingTurn;
+			await harness.adapter.emit(action("conversation-1", value));
+			await waitingTurn;
 
-		expect(harness.turnInputs).toHaveLength(1);
-		expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
-			approvalOutput.text,
-			approved ? "Tool approved." : "Tool denied.",
-		]);
-		await harness.stop();
-	});
+			expect(harness.turnInputs).toHaveLength(1);
+			expect(harness.adapter.sent.map(({ text }) => text)).toEqual([
+				approvalOutput.text,
+				approved ? "Tool approved." : "Tool denied.",
+			]);
+			await harness.stop();
+		},
+	);
 
 	test("applies the message access check to approval actions", async () => {
 		const approvalRequested = deferred<void>();
